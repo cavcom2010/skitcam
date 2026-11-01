@@ -47,6 +47,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
 import com.calvinmazhindu.skitcam.trim.TrimScreen
 
+import com.calvinmazhindu.skitcam.export.*
+
 class MainActivity : ComponentActivity() {
     val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
@@ -83,8 +85,11 @@ private fun MainActivity.CameraScreen() {
     val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
     val review = reviewController
     val arrangement = arrangementModel
+    val export by ExportJournal.status.collectAsStateWithLifecycle()
+    var dismissedExport by rememberSaveable { mutableStateOf<String?>(null) }
+    val finishing = export?.sessionId == snapshot.session?.id && export != null && dismissedExport != export?.sessionId
     val trimming = trimModel.segment != null
-    val arranging = arrangement.draft != null || trimming
+    val arranging = arrangement.draft != null || trimming || finishing
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
@@ -135,9 +140,9 @@ private fun MainActivity.CameraScreen() {
     }
 
     Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
-        if (granted) {
+        if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
             CameraPreview(recordingModel, Modifier.fillMaxSize())
-        } else {
+        } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
                 message = stringResource(
@@ -210,6 +215,7 @@ private fun MainActivity.CameraScreen() {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
+        if (finishing) ExportScreen(export!!) { dismissedExport = export!!.sessionId }
     }
 }
 

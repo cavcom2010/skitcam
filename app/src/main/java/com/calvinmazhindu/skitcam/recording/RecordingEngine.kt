@@ -75,7 +75,7 @@ class RecordingEngine(
         const val MAX_SEGMENTS = 100
         const val START_RESERVE = 100L * 1024 * 1024
         const val STOP_RESERVE = 50L * 1024 * 1024
-        const val COMPLETED_MESSAGE = "Session completed. Individual MP4 files retained; combining is not implemented."
+        const val COMPLETED_MESSAGE = "Recording session completed. Original MP4 files retained."
     }
     var snapshot = RecordingSnapshot()
         private set

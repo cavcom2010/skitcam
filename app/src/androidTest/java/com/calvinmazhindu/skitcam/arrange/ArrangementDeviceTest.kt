@@ -54,6 +54,7 @@ class ArrangementDeviceTest {
         shell("wm user-rotation lock 0")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         bindModels()
+        com.calvinmazhindu.skitcam.export.ExportTestSupport.beforeCamera()
         await("camera ready") { model.cameraReady }
         Assume.assumeTrue("Preserve any existing open session",
             model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
@@ -72,7 +73,7 @@ class ArrangementDeviceTest {
                 }
             }
         } finally {
-            if (::scenario.isInitialized) scenario.close()
+            if (::scenario.isInitialized) { com.calvinmazhindu.skitcam.export.ExportTestSupport.settle(); scenario.close() }
             originalRotation?.let { shell("wm user-rotation $it") }
         }
     }

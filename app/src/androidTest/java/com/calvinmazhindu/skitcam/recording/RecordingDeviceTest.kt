@@ -40,12 +40,13 @@ class RecordingDeviceTest {
             it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             model = it.recordingModel
         }
+        com.calvinmazhindu.skitcam.export.ExportTestSupport.beforeCamera()
         await("camera ready") { model.cameraReady }
         Assume.assumeTrue("Do not modify an existing open user session",
             model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
     }
     @After fun closeCamera() {
-        try { if (::scenario.isInitialized) scenario.close() }
+        try { if (::scenario.isInitialized) { com.calvinmazhindu.skitcam.export.ExportTestSupport.settle(); scenario.close() } }
         finally { originalRotation?.let { shell("wm user-rotation $it") } }
     }
     private fun await(description: String, predicate: () -> Boolean) {

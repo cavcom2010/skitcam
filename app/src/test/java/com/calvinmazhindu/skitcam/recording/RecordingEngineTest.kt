@@ -204,10 +204,10 @@ class RecordingEngineTest {
         assertEquals(1, recorder.stops)
         assertEquals(RecordingState.Paused, engine.snapshot.state)
     }
-    @Test fun completedSessionRestoresSeparateFilesNotice() {
+    @Test fun completedSessionRestoresSourcePreservationNotice() {
         begin(); pause(); engine.stop()
         val restored = engine(); restored.restore()
         assertEquals(RecordingState.Completed, restored.snapshot.state)
-        assertTrue(restored.snapshot.message!!.contains("combining is not implemented"))
+        assertTrue(restored.snapshot.message!!.contains("Original MP4 files retained"))
     }
 }

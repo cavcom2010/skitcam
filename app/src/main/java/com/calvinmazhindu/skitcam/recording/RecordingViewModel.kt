@@ -1,6 +1,7 @@
 package com.calvinmazhindu.skitcam.recording
 
 import com.calvinmazhindu.skitcam.trim.*
+import com.calvinmazhindu.skitcam.export.*
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
@@ -16,6 +17,7 @@ import java.util.concurrent.Executors
 class RecordingViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private var shared: RecordingRuntime? = null
+        fun cameraReleasedForExport(): Boolean = shared?.cameraReady != true
         private fun runtime(application: Application) = synchronized(this) {
             shared ?: RecordingRuntime(application).also { shared = it }
         }
@@ -61,19 +63,41 @@ private class RecordingRuntime(private val application: Application) {
             Cancellation { main.removeCallbacks(runnable) }
         }, availability = {
             when {
+                ExportJournal.busy -> "Wait for video finishing to complete."
                 !cameraReady -> "Wait for the rear-camera preview."
                 !hasPermission(Manifest.permission.CAMERA) -> "Camera permission is required."
                 !hasPermission(Manifest.permission.RECORD_AUDIO) -> "Microphone permission is required."
                 else -> null
             }
-        }, changed = { state.value = it })
-    init { worker.execute { engine.restore() } }
+        }, changed = {
+            state.value = it
+            if(it.state in setOf(RecordingState.Completed,RecordingState.Error)) it.session?.let { session ->
+                try { ExportJournal.finalised(application,session) } catch(_: Exception) { }
+            }
+        })
+    init { worker.execute {
+        engine.restore()
+        engine.snapshot.session?.let { try { ExportJournal.restore(application,it) } catch(_: Exception) {} }
+    } }
     private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(
         application, permission) == PackageManager.PERMISSION_GRANTED
     fun start(orientation: Int?) = worker.execute { engine.start(orientation) }
     fun resume(orientation: Int?) = worker.execute { engine.resume(orientation) }
     fun pause() = worker.execute { engine.pause() }
-    fun stop() = worker.execute { engine.stop() }
+    fun stop() = worker.execute {
+        val session=engine.snapshot.session
+        if(session!=null && engine.snapshot.state in setOf(RecordingState.Paused,RecordingState.Recording) && !ExportJournal.busy) {
+            try {
+                ExportJournal.request(application,session)
+                ExportJournal.busy=true
+                main.post {
+                    try { ExportService.launch(application,session.id) }
+                    catch(e: Exception) { ExportJournal.busy=false;ExportJournal.update(application,session.id,ExportState.Failed,e.message) }
+                }
+            } catch(_: Exception) { ExportJournal.busy=false }
+        }
+        engine.stop()
+    }
     fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) {
         worker.execute {
             val result = engine.setSegmentKept(sessionId, segmentId, kept)
