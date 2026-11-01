@@ -41,7 +41,7 @@ import com.calvinmazhindu.skitcam.recording.*
 fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingViewModel,
     review: SegmentReviewController, loader: ThumbnailLoader, modifier: Modifier = Modifier) {
     val selected = review.selection?.takeIf { it.sessionId == session.id }
-    val segment = session.segments.find { it.order == selected?.order }
+    val segment = session.segments.find { it.id == selected?.segmentId }
     BackHandler(enabled = selected != null) { review.close() }
     val thumbnailsEnabled = selected == null
     if (landscape) {
@@ -52,7 +52,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
             LazyRow(Modifier.fillMaxWidth().height(112.dp).background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(session.segments, key = { "${session.id}:${it.order}" }) {
+                items(session.segments, key = { it.id }) {
                     ThumbnailCard(it, true, loader, thumbnailsEnabled) { review.open(session.id, it) }
                 }
             }
@@ -62,7 +62,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
             LazyColumn(Modifier.width(88.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp).semantics { contentDescription = "Completed segments, vertical strip" },
                 verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(session.segments, key = { "${session.id}:${it.order}" }) {
+                items(session.segments, key = { it.id }) {
                     ThumbnailCard(it, false, loader, thumbnailsEnabled) { review.open(session.id, it) }
                 }
             }
@@ -111,14 +111,14 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-private fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
-    review: SegmentReviewController) {
+internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
+    review: SegmentReviewController, readOnly: Boolean = false) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(4.dp)) {
         val videoHeight = (maxHeight * 0.45f).coerceIn(64.dp, 240.dp)
         Surface(color = Color(0xF218181E), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.fillMaxWidth().padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
+                Text(if (readOnly) "Preview segment ${segment.order}" else "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
                     style = MaterialTheme.typography.titleSmall)
                 val player = review.player
                 if (player != null) {
@@ -137,6 +137,7 @@ private fun ReviewPanel(session: Session, segment: Segment, model: RecordingView
                     Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!readOnly) {
                     val canKeep = segment.kept || session.retainedCount < RecordingEngine.MAX_SEGMENTS
                     Button(onClick = { review.decide(model, true) }, enabled = !review.saving && canKeep,
                         modifier = Modifier.heightIn(min = 48.dp).semantics { selected = segment.kept },
@@ -146,9 +147,10 @@ private fun ReviewPanel(session: Session, segment: Segment, model: RecordingView
                         modifier = Modifier.heightIn(min = 48.dp).semantics { selected = !segment.kept },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
                         contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Discard") }
+                    }
                     TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
                         colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
-                        contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Close") }
+                        contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (readOnly) "Back to Arrange" else "Close") }
                 }
                 if (!segment.kept && session.retainedCount >= RecordingEngine.MAX_SEGMENTS) {
                     Text("100 kept segments. Discard another to restore this one.", style = MaterialTheme.typography.bodySmall)

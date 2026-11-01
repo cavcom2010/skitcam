@@ -21,14 +21,20 @@ import java.util.UUID
 class RecordingDeviceTest {
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var model: RecordingViewModel
+    private var originalRotation: String? = null
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+    private fun shell(command: String) = instrumentation.uiAutomation.executeShellCommand(command).use {
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText().trim()
+    }
 
     @Before fun openCamera() {
         for (permission in listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) {
             instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} $permission")
                 .use { android.os.ParcelFileDescriptor.AutoCloseInputStream(it).readBytes() }
         }
+        originalRotation = shell("wm user-rotation")
+        shell("wm user-rotation lock 0")
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
             it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -39,7 +45,8 @@ class RecordingDeviceTest {
             model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
     }
     @After fun closeCamera() {
-        if (::scenario.isInitialized) scenario.close()
+        try { if (::scenario.isInitialized) scenario.close() }
+        finally { originalRotation?.let { shell("wm user-rotation $it") } }
     }
     private fun await(description: String, predicate: () -> Boolean) {
         val deadline = System.nanoTime() + 25_000_000_000L

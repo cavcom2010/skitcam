@@ -31,6 +31,8 @@ class SegmentDecisionsTest {
     private val recorder = Recorder()
     private fun engine() = RecordingEngine(recorder, store, Watchdog { Cancellation {} })
     private val engine = engine()
+    private fun RecordingEngine.edit(sessionId: String, number: Int, kept: Boolean) =
+        setSegmentKept(sessionId, snapshot.session?.segments?.find { it.order == number }?.id ?: "unknown", kept)
     private fun fixture(count: Int = 2): Session {
         val session = Session("fixture", 123, 0, RecordingState.Paused,
             List(count) { Segment(it + 1, "/test-sessions/fixture/segment_${it + 1}.mp4", 1000L, 0, 90) })
@@ -40,14 +42,14 @@ class SegmentDecisionsTest {
     @Test fun defaultKeepAndMixedStatusPersistAndRestore() {
         val original = fixture()
         assertTrue(original.segments.all { it.kept })
-        assertTrue(engine.setSegmentKept(original.id, 1, false).success)
+        assertTrue(engine.edit(original.id, 1, false).success)
         assertEquals(1, engine.snapshot.count)
         assertEquals(1000L, engine.snapshot.durationMs)
         val restored = engine(); restored.restore()
         assertEquals(engine.snapshot.session, restored.snapshot.session)
         assertFalse(restored.snapshot.session!!.segments[0].kept)
         assertTrue(restored.snapshot.session!!.segments[1].kept)
-        assertTrue(restored.setSegmentKept(original.id, 1, true).success)
+        assertTrue(restored.edit(original.id, 1, true).success)
         assertEquals(2, restored.snapshot.count)
         assertEquals(original.segments.map { it.path }, restored.snapshot.session!!.segments.map { it.path })
     }
@@ -58,7 +60,7 @@ class SegmentDecisionsTest {
         repeat(segments.length()) { segments.getJSONObject(it).remove("kept") }
         val decoded = SessionCodec.decode(legacy.toString())
         assertTrue(decoded.segments.all { it.kept })
-        assertEquals(2, JSONObject(SessionCodec.encode(decoded)).getInt("version"))
+        assertEquals(3, JSONObject(SessionCodec.encode(decoded)).getInt("version"))
     }
     @Test fun v2MissingStatusDoesNotSilentlyRestoreDiscardedSegment() {
         val json = JSONObject(SessionCodec.encode(fixture()))
@@ -69,7 +71,7 @@ class SegmentDecisionsTest {
     @Test fun failedSaveKeepsPriorDecisionAndPausedState() {
         val original = fixture(); val json = store.json
         store.broken = true
-        assertFalse(engine.setSegmentKept(original.id, 1, false).success)
+        assertFalse(engine.edit(original.id, 1, false).success)
         assertEquals(json, store.json)
         assertEquals(original, engine.snapshot.session)
         assertEquals(RecordingState.Paused, engine.snapshot.state)
@@ -78,21 +80,21 @@ class SegmentDecisionsTest {
         val session = fixture(100)
         engine.resume(0)
         assertEquals(RecordingState.Paused, engine.snapshot.state)
-        assertTrue(engine.setSegmentKept(session.id, 50, false).success)
+        assertTrue(engine.edit(session.id, 50, false).success)
         assertEquals(99, engine.snapshot.count)
         engine.resume(0); recorder.event(RecorderEvent.Started)
         assertTrue(recorder.paths.single().endsWith("segment_101.mp4"))
         engine.pause(); recorder.event(RecorderEvent.Finalized(1200))
         assertEquals(100, engine.snapshot.count)
         assertEquals(101, engine.snapshot.session!!.segments.size)
-        assertFalse(engine.setSegmentKept(session.id, 50, true).success)
-        assertTrue(engine.setSegmentKept(session.id, 101, false).success)
-        assertTrue(engine.setSegmentKept(session.id, 50, true).success)
+        assertFalse(engine.edit(session.id, 50, true).success)
+        assertTrue(engine.edit(session.id, 101, false).success)
+        assertTrue(engine.edit(session.id, 50, true).success)
         assertEquals(100, engine.snapshot.count)
     }
     @Test fun allDiscardedCanCompleteWithoutLosingEntries() {
         val session = fixture()
-        engine.setSegmentKept(session.id, 1, false); engine.setSegmentKept(session.id, 2, false)
+        engine.edit(session.id, 1, false); engine.edit(session.id, 2, false)
         assertEquals(0, engine.snapshot.count)
         assertEquals(0L, engine.snapshot.durationMs)
         engine.stop()
@@ -102,25 +104,25 @@ class SegmentDecisionsTest {
     }
     @Test fun invalidCommandsAndIdempotentEditsDoNotChangeMetadata() {
         val session = fixture(); val json = store.json
-        assertFalse(engine.setSegmentKept("stale", 1, false).success)
-        assertFalse(engine.setSegmentKept(session.id, 999, false).success)
-        assertTrue(engine.setSegmentKept(session.id, 1, true).success)
+        assertFalse(engine.edit("stale", 1, false).success)
+        assertFalse(engine.edit(session.id, 999, false).success)
+        assertTrue(engine.edit(session.id, 1, true).success)
         assertEquals(json, store.json)
         engine.resume(0)
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
         recorder.event(RecorderEvent.Started)
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
         engine.pause()
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
         recorder.event(RecorderEvent.Finalized(1000))
         engine.stop()
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
     }
     @Test fun readyErrorAndStoppingRejectEdits() {
-        assertFalse(engine.setSegmentKept("none", 1, false).success)
+        assertFalse(engine.edit("none", 1, false).success)
         val session = fixture(); engine.resume(0); recorder.event(RecorderEvent.Started); engine.stop()
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
         recorder.event(RecorderEvent.Finalized(1000, "Recording failed"))
-        assertFalse(engine.setSegmentKept(session.id, 1, false).success)
+        assertFalse(engine.edit(session.id, 1, false).success)
     }
 }

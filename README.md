@@ -1,11 +1,11 @@
 # SkitCam
 
 A native Android segment camera built with Kotlin, Jetpack Compose and CameraX.
-Milestone 3 adds a PAUSE environment with thumbnails, local playback and persistent
-Keep/Discard decisions, preserving the recording engine and live preview.
+Milestone 4 adds touch arrangement with independent playback order, preserving
+the recording engine, live preview, thumbnails and Keep/Discard decisions.
 
 **STOP retains separate MP4 segments and marks the session completed. It does
-not combine them into a final video.** There is no trimming, arrangement, export,
+not combine them into a final video.** There is no trimming, export,
 authentication, backend or network functionality.
 
 ## Recording
@@ -53,7 +53,28 @@ counter and session duration while preserving its MP4. Discarded items remain
 labelled in the strip and can be restored with Keep, subject to the 100-kept
 limit. Missing/corrupt media displays a placeholder or playback error without
 silently changing its status. Decisions are accepted only while Paused and
-published after atomic persistence. Arrange remains disabled for a later milestone.
+published after atomic persistence.
+
+## Arrangement
+
+Arrange is enabled while Paused with at least two kept segments. It opens an
+overlay in the same activity; the camera stays bound underneath. Rows show
+playback position, original segment number, thumbnail, duration and a drag handle.
+Hold a handle and drag to reorder; holding near an edge scrolls the list. Move
+up/down buttons and accessibility actions provide alternatives to dragging.
+
+Moves are tentative until **Done** saves atomically. **Cancel** or Back leaves
+the saved order unchanged. The draft survives backgrounding and activity
+recreation in memory; a process restart returns to the last saved order.
+Preview opens the existing player without autoplay or Keep/Discard controls;
+Back to Arrange preserves the draft. Playback is released when leaving preview,
+backgrounding, closing Arrange or starting another recording.
+
+The PAUSE strip stays in recording chronology. Arrangement only changes a
+separate playback-order list. Discard removes a segment from that list; restoring
+it appends it to the end. New recordings also append. Existing arranged items
+keep their relative order, original filenames and recording numbers. STOP keeps
+the chosen order for future assembly, which is not implemented yet.
 
 ## Build
 
@@ -104,8 +125,11 @@ files/sessions/<session-id>/
 
 Metadata records session state, timestamps, ordered segments, recording duration,
 physical orientation, encoded video rotation, absolute file paths, errors and
-the pending attempt. Version 2 also stores each segment's `kept` boolean; version 1
-loads with every successful segment kept. Writes use Android AtomicFile on one
+the pending attempt. Version 3 includes immutable segment IDs and a separate
+`playbackOrder` list of kept IDs. Versions 1/2 load deterministic IDs derived from
+session ID and recording number, with chronological playback order; version 1
+defaults every successful segment to Keep. Legacy metadata upgrades only on a
+subsequent save. Writes use Android AtomicFile on one
 worker. MP4s are never overwritten or automatically deleted by SkitCam. New
 segment numbers use the full history, including discarded items, so freeing
 capacity cannot reuse an existing filename. Failed candidates remain
@@ -128,7 +152,7 @@ Uninstalling the app or clearing its data removes app-specific storage; use
 ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --no-daemon
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r -e class com.calvinmazhindu.skitcam.recording.RecordingDeviceTest,com.calvinmazhindu.skitcam.review.PauseEnvironmentDeviceTest com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
+~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r -e class com.calvinmazhindu.skitcam.recording.RecordingDeviceTest,com.calvinmazhindu.skitcam.review.PauseEnvironmentDeviceTest,com.calvinmazhindu.skitcam.arrange.ArrangementDeviceTest com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 JVM tests exercise transitions, duplicate/stale events, finalisation, failure
@@ -139,7 +163,9 @@ They retain their test sessions and leave the last one paused for restart testin
 they skip recording if an existing open session is detected. Do not run the
 hardware suite during a session you want to continue recording. Review tests play
 real files and record afterward, exercise both strip layouts and scrolling, and
-preserve their diagnostic fixtures. Temporary rotation locks are restored afterward.
+preserve their diagnostic fixtures. Arrangement tests inject real long-press touch
+gestures, exercise edge auto-scroll, cancellation, preview, stale saves and
+recording afterward. Temporary rotation locks are restored afterward.
 
 ## Versions
 
@@ -178,7 +204,8 @@ official distribution SHA-256. Wrapper files must be retained in source control.
         │   ├── CameraPreview.kt    # Preview + video use-case binding
         │   ├── recording/         # State machine, CameraX adapter, metadata,
         │   │                      # orientation, ViewModel and controls
-        │   └── review/            # Lazy thumbnails, review UI and player ownership
+        │   ├── review/            # Lazy thumbnails, review UI and player ownership
+        │   └── arrange/           # In-memory drafts and touch arrangement overlay
         └── res/                   # App name, theme and vector launcher icon
 ```
 
@@ -187,5 +214,5 @@ official distribution SHA-256. Wrapper files must be retained in source control.
 Check camera/microphone permissions, START/PAUSE/RESUME/STOP, orientation locks,
 background/foreground behavior and retained MP4s. Physical sensor behavior needs
 the phone to be held and rotated; the device engine tests inject a known pose
-while using real CameraX, microphone and storage. See `VALIDATION_M3.md` for the
+while using real CameraX, microphone and storage. See `VALIDATION_M4.md` for the
 current results. Earlier validation reports preserve the Milestone 1 and 2 results.

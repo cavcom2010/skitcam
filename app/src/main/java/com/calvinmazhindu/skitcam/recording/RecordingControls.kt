@@ -29,11 +29,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, cameraGranted: Boolean,
-    beforeRecording: () -> Unit = {}) {
+    beforeRecording: () -> Unit = {}, onArrange: () -> Unit = {}, onBackground: () -> Unit = beforeRecording) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
     var pose by remember { mutableStateOf<Int?>(null) }
     val releaseReview by rememberUpdatedState(beforeRecording)
+    val releaseOnBackground by rememberUpdatedState(onBackground)
     fun audioGranted() = ContextCompat.checkSelfPermission(activity,
         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     var microphone by remember { mutableStateOf(audioGranted()) }
@@ -55,7 +56,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
                     else pose = null
                 }
                 Lifecycle.Event.ON_PAUSE -> {
-                    releaseReview()
+                    releaseOnBackground()
                     tracker.stop()
                     model.cameraReady = false
                 }
@@ -125,8 +126,9 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
                 snapshot.state in setOf(RecordingState.Recording, RecordingState.Paused)) { Text("STOP") }
         }
         if (snapshot.state == RecordingState.Paused) {
-            TextButton(onClick = {}, enabled = false, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Arrange · later")
+            TextButton(onClick = onArrange, enabled = snapshot.count >= 2 && !snapshot.unresolved,
+                modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Arrange")
             }
         }
         val warning = when {

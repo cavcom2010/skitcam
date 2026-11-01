@@ -15,7 +15,7 @@ import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
 import java.io.File
 
-data class ReviewSelection(val sessionId: String, val order: Int)
+data class ReviewSelection(val sessionId: String, val segmentId: String)
 
 /** Activity-owned UI resources, deliberately separate from the durable recording runtime. Main thread only. */
 class SegmentReviewController(context: Context) {
@@ -36,7 +36,7 @@ class SegmentReviewController(context: Context) {
 
     fun open(sessionId: String, segment: Segment) {
         close()
-        selection = ReviewSelection(sessionId, segment.order)
+        selection = ReviewSelection(sessionId, segment.id)
         val file = File(segment.path)
         if (!file.isFile || !file.canRead() || file.length() == 0L) {
             error = "Video unavailable. The original file is missing or unreadable."
@@ -79,7 +79,7 @@ class SegmentReviewController(context: Context) {
         val token = generation
         saving = true
         feedback = null
-        model.setSegmentKept(selected.sessionId, selected.order, kept) { result ->
+        model.setSegmentKept(selected.sessionId, selected.segmentId, kept) { result ->
             if (generation == token && selection == selected) {
                 saving = false
                 feedback = result.message ?: if (kept) "Kept" else "Discarded · original file retained"

@@ -6,13 +6,24 @@ import java.util.UUID
 enum class RecordingState { Ready, Starting, Recording, Finalising, Paused, Stopping, Completed, Error }
 
 data class Segment(val order: Int, val path: String, val durationMs: Long,
-    val orientationDegrees: Int, val videoRotationDegrees: Int, val kept: Boolean = true)
+    val orientationDegrees: Int, val videoRotationDegrees: Int, val kept: Boolean = true,
+    val id: String = UUID.randomUUID().toString())
 data class PendingSegment(val id: String, val path: String, val order: Int)
 data class Session(val id: String, val createdAtMs: Long, val orientationDegrees: Int,
     val state: RecordingState, val segments: List<Segment> = emptyList(),
-    val pending: PendingSegment? = null, val error: String? = null) {
+    val pending: PendingSegment? = null, val error: String? = null,
+    val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id }) {
     val durationMs: Long get() = segments.filter { it.kept }.sumOf { it.durationMs }
     val retainedCount: Int get() = segments.count { it.kept }
+    val playbackSegments: List<Segment> get() {
+        val byId = segments.associateBy { it.id }
+        return playbackOrder.map { byId.getValue(it) }
+    }
+    fun validPlaybackOrder(ids: List<String> = playbackOrder): Boolean {
+        val retained = segments.filter { it.kept }.map { it.id }.toSet()
+        return segments.all { it.id.isNotBlank() } && segments.map { it.id }.distinct().size == segments.size &&
+            ids.size == retained.size && ids.toSet() == retained
+    }
 }
 data class RecordingSnapshot(val state: RecordingState = RecordingState.Ready,
     val session: Session? = null, val activeDurationMs: Long = 0,
@@ -150,21 +161,21 @@ class RecordingEngine(
         if (snapshot.state == RecordingState.Recording) requestFinalization(RecordingState.Finalising)
     }
     /** Metadata edits never transition the recording state or remove a source file. */
-    fun setSegmentKept(sessionId: String, order: Int, kept: Boolean): SegmentEditResult {
+    fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean): SegmentEditResult {
         if (snapshot.state != RecordingState.Paused || activeId != null) {
             return SegmentEditResult(false, "Segments can only be changed while paused.")
         }
         val session = snapshot.session ?: return SegmentEditResult(false, "No session is available.")
         if (session.id != sessionId) return SegmentEditResult(false, "This session is no longer selected.")
-        val segment = session.segments.find { it.order == order }
+        val segment = session.segments.find { it.id == segmentId }
             ?: return SegmentEditResult(false, "Segment is no longer available.")
         if (segment.kept == kept) return SegmentEditResult(true)
         if (kept && session.retainedCount >= MAX_SEGMENTS) {
             return SegmentEditResult(false, "100 kept segments already. Discard another segment before restoring this one.")
         }
         val updated = session.copy(segments = session.segments.map {
-            if (it.order == order) it.copy(kept = kept) else it
-        })
+            if (it.id == segmentId) it.copy(kept = kept) else it
+        }, playbackOrder = if (kept) session.playbackOrder + segmentId else session.playbackOrder - segmentId)
         return try {
             store.save(updated)
             publish(session = updated, message = if (updated.retainedCount == MAX_SEGMENTS)
@@ -172,6 +183,27 @@ class RecordingEngine(
             SegmentEditResult(true)
         } catch (_: Exception) {
             SegmentEditResult(false, "Could not save the decision. The previous status and original file are unchanged.")
+        }
+    }
+    fun savePlaybackOrder(sessionId: String, expectedOrder: List<String>, order: List<String>): SegmentEditResult {
+        if (snapshot.state != RecordingState.Paused || activeId != null) {
+            return SegmentEditResult(false, "Arrangement can only be saved while paused.")
+        }
+        val session = snapshot.session ?: return SegmentEditResult(false, "No session is available.")
+        if (session.id != sessionId || session.playbackOrder != expectedOrder) {
+            return SegmentEditResult(false, "The session changed. Cancel and reopen Arrange.")
+        }
+        if (!session.validPlaybackOrder(order)) {
+            return SegmentEditResult(false, "Order must contain each kept segment exactly once.")
+        }
+        if (session.playbackOrder == order) return SegmentEditResult(true)
+        return try {
+            val updated = session.copy(playbackOrder = order.toList())
+            store.save(updated)
+            publish(session = updated)
+            SegmentEditResult(true)
+        } catch (_: Exception) {
+            SegmentEditResult(false, "Could not save the order. The previous order and all MP4s are unchanged.")
         }
     }
     fun stop() {
@@ -256,7 +288,7 @@ class RecordingEngine(
             check(event.durationMs > 0) { "Recording contained no valid duration." }
             val rotation = store.validate(pending.path)
             val segment = Segment(pending.order, pending.path, event.durationMs,
-                session.orientationDegrees, rotation)
+                session.orientationDegrees, rotation, id = pending.id)
             val next = when {
                 terminalReason != null -> RecordingState.Error
                 requestedState == RecordingState.Stopping -> RecordingState.Completed
@@ -270,7 +302,8 @@ class RecordingEngine(
             }
             // UI count changes only after durable registration, never when stop() is called.
             val updated = session.copy(state = next, segments = session.segments + segment,
-                pending = null, error = if (next == RecordingState.Error) message else null)
+                pending = null, error = if (next == RecordingState.Error) message else null,
+                playbackOrder = session.playbackOrder + segment.id)
             store.save(updated)
             publish(next, updated, 0, message)
         } catch (exception: Exception) {

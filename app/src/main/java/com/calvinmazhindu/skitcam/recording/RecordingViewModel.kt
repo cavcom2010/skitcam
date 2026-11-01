@@ -31,8 +31,10 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     fun resume(orientation: Int?) = runtime.resume(orientation)
     fun pause() = runtime.pause()
     fun stop() = runtime.stop()
-    fun setSegmentKept(sessionId: String, order: Int, kept: Boolean, finished: (SegmentEditResult) -> Unit) =
-        runtime.setSegmentKept(sessionId, order, kept, finished)
+    fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) =
+        runtime.setSegmentKept(sessionId, segmentId, kept, finished)
+    fun savePlaybackOrder(sessionId: String, expected: List<String>, order: List<String>, finished: (SegmentEditResult) -> Unit) =
+        runtime.savePlaybackOrder(sessionId, expected, order, finished)
     fun background() = runtime.background()
     fun cameraError() = runtime.cameraError()
     override fun onCleared() { runtime.background() }
@@ -69,9 +71,17 @@ private class RecordingRuntime(private val application: Application) {
     fun resume(orientation: Int?) = worker.execute { engine.resume(orientation) }
     fun pause() = worker.execute { engine.pause() }
     fun stop() = worker.execute { engine.stop() }
-    fun setSegmentKept(sessionId: String, order: Int, kept: Boolean, finished: (SegmentEditResult) -> Unit) {
+    fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) {
         worker.execute {
-            val result = engine.setSegmentKept(sessionId, order, kept)
+            val result = engine.setSegmentKept(sessionId, segmentId, kept)
+            main.post { finished(result) }
+        }
+    }
+    fun savePlaybackOrder(sessionId: String, expected: List<String>, order: List<String>, finished: (SegmentEditResult) -> Unit) {
+        val baseline = expected.toList()
+        val proposed = order.toList()
+        worker.execute {
+            val result = engine.savePlaybackOrder(sessionId, baseline, proposed)
             main.post { finished(result) }
         }
     }

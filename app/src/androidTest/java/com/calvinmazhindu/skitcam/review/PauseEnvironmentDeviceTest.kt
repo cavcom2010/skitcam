@@ -231,6 +231,6 @@ class PauseEnvironmentDeviceTest {
             node { it.contentDescription?.toString() == "Review segment 1, Discarded" } != null
         }
         screenshot("discarded-restored")
-        // Leave this newly created fixture paused for a separate real process-restart check.
+        model.stop(); state(RecordingState.Completed)
     }
 }
