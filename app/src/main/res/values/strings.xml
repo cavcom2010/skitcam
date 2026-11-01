@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">SkitCam</string>
+    <string name="camera_permission">Allow camera access to see the live rear-camera preview.</string>
+    <string name="camera_denied">Camera access is off. Allow access to use the preview.</string>
+    <string name="camera_settings">Camera access is off. Enable Camera in app settings, then return here.</string>
+    <string name="allow_camera">Allow camera</string>
+    <string name="open_settings">Open settings</string>
+    <string name="starting_camera">Starting camera…</string>
+    <string name="camera_error">Camera unavailable. Check camera access and close other camera apps, then try again.</string>
+    <string name="try_again">Try again</string>
+    <string name="rear_camera">REAR CAMERA</string>
+    <string name="recording_unavailable">Recording unavailable</string>
+</resources>
