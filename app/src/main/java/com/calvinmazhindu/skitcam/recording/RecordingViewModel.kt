@@ -31,6 +31,8 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     fun resume(orientation: Int?) = runtime.resume(orientation)
     fun pause() = runtime.pause()
     fun stop() = runtime.stop()
+    fun setSegmentKept(sessionId: String, order: Int, kept: Boolean, finished: (SegmentEditResult) -> Unit) =
+        runtime.setSegmentKept(sessionId, order, kept, finished)
     fun background() = runtime.background()
     fun cameraError() = runtime.cameraError()
     override fun onCleared() { runtime.background() }
@@ -67,6 +69,12 @@ private class RecordingRuntime(private val application: Application) {
     fun resume(orientation: Int?) = worker.execute { engine.resume(orientation) }
     fun pause() = worker.execute { engine.pause() }
     fun stop() = worker.execute { engine.stop() }
+    fun setSegmentKept(sessionId: String, order: Int, kept: Boolean, finished: (SegmentEditResult) -> Unit) {
+        worker.execute {
+            val result = engine.setSegmentKept(sessionId, order, kept)
+            main.post { finished(result) }
+        }
+    }
     fun background() {
         worker.execute { engine.background() }
         // onPause must stop the source synchronously, before CameraX sees ON_STOP.

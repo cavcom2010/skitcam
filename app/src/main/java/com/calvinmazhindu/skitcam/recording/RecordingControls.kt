@@ -28,10 +28,12 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, cameraGranted: Boolean) {
+fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, cameraGranted: Boolean,
+    beforeRecording: () -> Unit = {}) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
     var pose by remember { mutableStateOf<Int?>(null) }
+    val releaseReview by rememberUpdatedState(beforeRecording)
     fun audioGranted() = ContextCompat.checkSelfPermission(activity,
         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     var microphone by remember { mutableStateOf(audioGranted()) }
@@ -53,6 +55,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
                     else pose = null
                 }
                 Lifecycle.Event.ON_PAUSE -> {
+                    releaseReview()
                     tracker.stop()
                     model.cameraReady = false
                 }
@@ -60,6 +63,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
             }
         }
         val beforeStart: (Int) -> Unit = { degrees ->
+            releaseReview()
             check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
                 "Camera screen left the foreground before recording started."
             }
@@ -106,19 +110,24 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(snapshot.state.name, color = Color.White, style = MaterialTheme.typography.titleSmall)
         val seconds = snapshot.durationMs / 1000
-        Text("%02d:%02d · %d/100 segments".format(seconds / 60, seconds % 60, snapshot.count),
+        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, snapshot.count),
             color = Color.White, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
         when (snapshot.state) {
             RecordingState.Ready, RecordingState.Completed -> Button(
-                onClick = { if (microphone) model.start(pose) else requestAudio() }, enabled = canStart) { Text("START") }
+                onClick = { releaseReview(); if (microphone) model.start(pose) else requestAudio() }, enabled = canStart) { Text("START") }
             RecordingState.Recording -> Button(onClick = { model.pause() }) { Text("PAUSE") }
             RecordingState.Paused -> Button(
-                onClick = { if (microphone) model.resume(pose) else requestAudio() }, enabled = canResume) { Text("RESUME") }
+                onClick = { releaseReview(); if (microphone) model.resume(pose) else requestAudio() }, enabled = canResume) { Text("RESUME") }
             else -> Unit
         }
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed)) {
-            OutlinedButton(onClick = { model.stop() }, enabled = !snapshot.unresolved && snapshot.state == RecordingState.Error ||
+            OutlinedButton(onClick = { releaseReview(); model.stop() }, enabled = !snapshot.unresolved && snapshot.state == RecordingState.Error ||
                 snapshot.state in setOf(RecordingState.Recording, RecordingState.Paused)) { Text("STOP") }
+        }
+        if (snapshot.state == RecordingState.Paused) {
+            TextButton(onClick = {}, enabled = false, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("Arrange · later")
+            }
         }
         val warning = when {
             snapshot.state == RecordingState.Error -> snapshot.message

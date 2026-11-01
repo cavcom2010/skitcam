@@ -4,8 +4,6 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.util.AtomicFile
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 /** Called only on the engine worker. AtomicFile protects the last committed metadata. */
@@ -18,21 +16,11 @@ class SessionFileStore(private val root: File) : SessionStore {
     override fun save(session: Session) {
         val directory = File(root, session.id)
         check(directory.isDirectory || directory.mkdirs()) { "Could not create session directory." }
-        val json = JSONObject().put("version", 1).put("id", session.id)
-            .put("createdAtMs", session.createdAtMs).put("orientationDegrees", session.orientationDegrees)
-            .put("state", session.state.name).put("error", session.error ?: JSONObject.NULL)
-            .put("segments", JSONArray().apply {
-                session.segments.forEach { segment -> put(JSONObject()
-                    .put("order", segment.order).put("path", segment.path)
-                    .put("durationMs", segment.durationMs).put("orientationDegrees", segment.orientationDegrees)
-                    .put("videoRotationDegrees", segment.videoRotationDegrees)) }
-            }).put("pending", session.pending?.let {
-                JSONObject().put("id", it.id).put("path", it.path).put("order", it.order)
-            } ?: JSONObject.NULL)
+        val json = SessionCodec.encode(session)
         val atomic = AtomicFile(File(directory, "session.json"))
         val output = atomic.startWrite()
         try {
-            output.write(json.toString(2).toByteArray(Charsets.UTF_8))
+            output.write(json.toByteArray(Charsets.UTF_8))
             atomic.finishWrite(output)
         } catch (exception: Exception) {
             atomic.failWrite(output)
@@ -43,18 +31,7 @@ class SessionFileStore(private val root: File) : SessionStore {
         val metadata = root.listFiles().orEmpty().filter { it.isDirectory }
             .map { File(it, "session.json") }.filter { it.exists() || File(it.path + ".bak").exists() }
             .maxByOrNull { maxOf(it.lastModified(), File(it.path + ".bak").lastModified()) } ?: return null
-        val json = AtomicFile(metadata).openRead().bufferedReader().use { JSONObject(it.readText()) }
-        check(json.getInt("version") == 1) { "Unknown session metadata version." }
-        val segments = json.getJSONArray("segments")
-        return Session(json.getString("id"), json.getLong("createdAtMs"),
-            json.getInt("orientationDegrees"), RecordingState.valueOf(json.getString("state")),
-            List(segments.length()) { index -> segments.getJSONObject(index).let {
-                Segment(it.getInt("order"), it.getString("path"), it.getLong("durationMs"),
-                    it.getInt("orientationDegrees"), it.getInt("videoRotationDegrees"))
-            } },
-            if (json.isNull("pending")) null else json.getJSONObject("pending").let {
-                PendingSegment(it.getString("id"), it.getString("path"), it.getInt("order"))
-            }, if (json.isNull("error")) null else json.getString("error"))
+        return AtomicFile(metadata).openRead().bufferedReader().use { SessionCodec.decode(it.readText()) }
     }
     override fun validate(path: String): Int {
         val file = File(path)

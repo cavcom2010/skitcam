@@ -1,11 +1,11 @@
 # SkitCam
 
 A native Android segment camera built with Kotlin, Jetpack Compose and CameraX.
-Milestone 2 adds audio/video recording sessions while preserving the rear-camera
-preview, permission recovery, dark interface and lifecycle handling.
+Milestone 3 adds a PAUSE environment with thumbnails, local playback and persistent
+Keep/Discard decisions, preserving the recording engine and live preview.
 
 **STOP retains separate MP4 segments and marks the session completed. It does
-not combine them into a final video.** There is no editing, review, export,
+not combine them into a final video.** There is no trimming, arrangement, export,
 authentication, backend or network functionality.
 
 ## Recording
@@ -15,7 +15,8 @@ authentication, backend or network functionality.
 - **PAUSE** stops the recording and waits for CameraX finalisation, audio/video
   sample validation and metadata persistence before registering the segment.
 - **RESUME** records a new MP4 in the same session. Paused time is excluded from
-  the duration. Up to 100 confirmed segments are supported per session.
+  the duration. Up to 100 kept segments are supported per session; discarded
+  segments stay in the history without using retained capacity.
 - **STOP** finalises an active segment and completes the session; while paused,
   it completes the session without creating another file. START after completion
   begins a separate session and preserves all earlier files.
@@ -32,6 +33,27 @@ Returning never resumes automatically. Errors retain confirmed segments and any
 unfinished candidate file; press STOP to close a settled error before START.
 An unresolved finalisation blocks new recordings, including after closing and
 reopening the activity. A 30-second watchdog reports a stuck operation.
+
+## PAUSE environment
+
+Successfully finalised segments appear in a scrollable strip on the **left in
+portrait** and at the **bottom in landscape**, alongside the live preview.
+Thumbnails load lazily off the main thread, with one extraction at a time and a
+2 MiB memory cache. Pending recordings and failed candidates are never shown.
+
+Tap a thumbnail to open review. Playback starts paused: use Play and the seek
+bar to review video with sound. Keep/Discard saves the decision immediately and
+leaves review open. Close or Back releases playback without changing the decision.
+Review is optional; RESUME releases playback and audio focus before recording.
+Backgrounding or recreating the activity closes review. Player selection and
+playback position are not persisted.
+
+Every successful segment starts as **Keep**. **Discard** excludes it from the
+counter and session duration while preserving its MP4. Discarded items remain
+labelled in the strip and can be restored with Keep, subject to the 100-kept
+limit. Missing/corrupt media displays a placeholder or playback error without
+silently changing its status. Decisions are accepted only while Paused and
+published after atomic persistence. Arrange remains disabled for a later milestone.
 
 ## Build
 
@@ -82,8 +104,11 @@ files/sessions/<session-id>/
 
 Metadata records session state, timestamps, ordered segments, recording duration,
 physical orientation, encoded video rotation, absolute file paths, errors and
-the pending attempt. Writes use Android AtomicFile on one worker; files are
-never overwritten or automatically deleted by SkitCam. Failed candidates remain
+the pending attempt. Version 2 also stores each segment's `kept` boolean; version 1
+loads with every successful segment kept. Writes use Android AtomicFile on one
+worker. MP4s are never overwritten or automatically deleted by SkitCam. New
+segment numbers use the full history, including discarded items, so freeing
+capacity cannot reuse an existing filename. Failed candidates remain
 unregistered, even when CameraX produced a playable partial file.
 
 At least 100 MiB free is required before a segment starts. Recording requests a
@@ -103,15 +128,18 @@ Uninstalling the app or clearing its data removes app-specific storage; use
 ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --no-daemon
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
+~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r -e class com.calvinmazhindu.skitcam.recording.RecordingDeviceTest,com.calvinmazhindu.skitcam.review.PauseEnvironmentDeviceTest com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 JVM tests exercise transitions, duplicate/stale events, finalisation, failure
-preservation, storage guards, the 100-segment limit, timeouts and orientation.
+preservation, storage guards, the 100-kept limit, timeouts and orientation. Codec
+tests cover legacy metadata, decisions, restart restoration and write failures.
 Device tests grant camera/microphone permission and create real audio/video MP4s.
 They retain their test sessions and leave the last one paused for restart testing;
 they skip recording if an existing open session is detected. Do not run the
-hardware suite during a session you want to continue recording.
+hardware suite during a session you want to continue recording. Review tests play
+real files and record afterward, exercise both strip layouts and scrolling, and
+preserve their diagnostic fixtures. Temporary rotation locks are restored afterward.
 
 ## Versions
 
@@ -124,6 +152,7 @@ hardware suite during a session you want to continue recording.
 | Activity Compose | 1.12.1 |
 | Lifecycle | 2.10.0 |
 | CameraX camera2 / lifecycle / view / video | 1.5.3 |
+| Media3 ExoPlayer / UI | 1.9.4 |
 | Minimum / compile / target SDK | 26 / 36 / 36 |
 
 The genuine Wrapper was generated by Gradle's `wrapper` task. Its JAR SHA-256 is
@@ -147,8 +176,9 @@ official distribution SHA-256. Wrapper files must be retained in source control.
         ├── java/com/calvinmazhindu/skitcam/
         │   ├── MainActivity.kt     # Camera permission and lifecycle entry point
         │   ├── CameraPreview.kt    # Preview + video use-case binding
-        │   └── recording/         # State machine, CameraX adapter, metadata,
-        │                          # orientation, ViewModel and controls
+        │   ├── recording/         # State machine, CameraX adapter, metadata,
+        │   │                      # orientation, ViewModel and controls
+        │   └── review/            # Lazy thumbnails, review UI and player ownership
         └── res/                   # App name, theme and vector launcher icon
 ```
 
@@ -157,5 +187,5 @@ official distribution SHA-256. Wrapper files must be retained in source control.
 Check camera/microphone permissions, START/PAUSE/RESUME/STOP, orientation locks,
 background/foreground behavior and retained MP4s. Physical sensor behavior needs
 the phone to be held and rotated; the device engine tests inject a known pose
-while using real CameraX, microphone and storage. See `VALIDATION_M2.md` for the
-current results; `VALIDATION.md` preserves the historical Milestone 1 report.
+while using real CameraX, microphone and storage. See `VALIDATION_M3.md` for the
+current results. Earlier validation reports preserve the Milestone 1 and 2 results.

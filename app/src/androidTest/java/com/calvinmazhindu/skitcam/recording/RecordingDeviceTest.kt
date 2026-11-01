@@ -137,6 +137,6 @@ class RecordingDeviceTest {
         state(RecordingState.Paused)
         assertEquals(saved, model.snapshots.value.session)
         verifyFiles(saved)
-        // Leave this confirmed paused fixture for a separate force-stop/reopen check.
+        model.stop(); state(RecordingState.Completed)
     }
 }

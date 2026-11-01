@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -33,9 +35,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.ViewModelProvider
 import com.calvinmazhindu.skitcam.recording.RecordingControls
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
+import com.calvinmazhindu.skitcam.recording.RecordingState
+import com.calvinmazhindu.skitcam.review.PausedEnvironment
+import com.calvinmazhindu.skitcam.review.SegmentReviewController
+import com.calvinmazhindu.skitcam.review.ThumbnailLoader
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
+    val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -49,8 +57,13 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onPause() {
+        reviewController.close()
         recordingModel.background()
         super.onPause()
+    }
+    override fun onDestroy() {
+        reviewController.close()
+        super.onDestroy()
     }
 }
 
@@ -58,6 +71,16 @@ class MainActivity : ComponentActivity() {
 private fun MainActivity.CameraScreen() {
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
+    val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
+    val review = reviewController
+    val thumbnails = remember { ThumbnailLoader() }
+    var headerHeight by remember { mutableIntStateOf(0) }
+    var controlsHeight by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    LaunchedEffect(snapshot.state, snapshot.session?.id) {
+        if (snapshot.state != RecordingState.Paused ||
+            review.selection?.sessionId?.let { it != snapshot.session?.id } == true) review.close()
+    }
     val preferences = remember { getSharedPreferences("camera_permission", Context.MODE_PRIVATE) }
     fun hasPermission() = ContextCompat.checkSelfPermission(
         this, Manifest.permission.CAMERA
@@ -120,7 +143,10 @@ private fun MainActivity.CameraScreen() {
             Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))
         ))
         Row(
-            Modifier.fillMaxWidth().safeDrawingPadding().padding(24.dp),
+            Modifier.fillMaxWidth().onSizeChanged { headerHeight = it.height }
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))
+                .padding(start = 24.dp, top = 24.dp, bottom = 24.dp,
+                    end = if (landscape) 264.dp else 24.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -128,9 +154,21 @@ private fun MainActivity.CameraScreen() {
             Text(stringResource(R.string.rear_camera), color = Color.White.copy(alpha = 0.75f),
                 style = MaterialTheme.typography.labelSmall)
         }
+        if (snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
+            val top = with(density) { headerHeight.toDp() }
+            val bottom = with(density) { controlsHeight.toDp() }
+            PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
+                Modifier.fillMaxSize()
+                    .padding(top = top, bottom = if (landscape) 0.dp else bottom,
+                        end = if (landscape) 240.dp else 0.dp)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(
+                        if (landscape) WindowInsetsSides.Start + WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal))
+                    .padding(8.dp))
+        }
         Column(
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(240.dp).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
+                .onSizeChanged { controlsHeight = it.height }
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -140,7 +178,8 @@ private fun MainActivity.CameraScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
-            RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted)
+            RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted,
+                beforeRecording = { review.close() })
         }
     }
 }
