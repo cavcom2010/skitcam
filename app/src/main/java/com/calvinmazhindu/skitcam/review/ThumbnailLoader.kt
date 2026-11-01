@@ -26,17 +26,17 @@ class ThumbnailLoader {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
         // Do not recycle evicted bitmaps: a visible Compose image may still reference them.
     }
-    suspend fun load(segment: Segment): ThumbnailResult = withContext(Dispatchers.IO) {
+    suspend fun load(segment: Segment, sampleMs: Long = minOf(500, segment.durationMs / 2)): ThumbnailResult = withContext(Dispatchers.IO) {
         decoder.withPermit {
             coroutineContext.ensureActive()
             val file = File(segment.path)
             if (!file.isFile || !file.canRead() || file.length() == 0L) return@withPermit ThumbnailResult.Unavailable
-            val key = "${segment.path}:${file.length()}:${file.lastModified()}"
+            val key = "${segment.path}:${file.length()}:${file.lastModified()}:$sampleMs"
             cache.get(key)?.let { return@withPermit ThumbnailResult.Ready(it) }
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(segment.path)
-                val timeUs = minOf(500, segment.durationMs / 2) * 1000
+                val timeUs = sampleMs.coerceIn(0, Long.MAX_VALUE / 1000) * 1000
                 val bitmap = if (Build.VERSION.SDK_INT >= 27) {
                     retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 160, 160)
                 } else {

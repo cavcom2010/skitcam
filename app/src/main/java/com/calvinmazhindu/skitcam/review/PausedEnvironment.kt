@@ -39,7 +39,7 @@ import com.calvinmazhindu.skitcam.recording.*
 
 @Composable
 fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingViewModel,
-    review: SegmentReviewController, loader: ThumbnailLoader, modifier: Modifier = Modifier) {
+    review: SegmentReviewController, loader: ThumbnailLoader, modifier: Modifier = Modifier, onTrim: (Segment) -> Unit = {}) {
     val selected = review.selection?.takeIf { it.sessionId == session.id }
     val segment = session.segments.find { it.id == selected?.segmentId }
     BackHandler(enabled = selected != null) { review.close() }
@@ -47,7 +47,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     if (landscape) {
         Column(modifier) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (segment != null) ReviewPanel(session, segment, model, review)
+                if (segment != null) ReviewPanel(session, segment, model, review, onTrim = { onTrim(segment) })
             }
             LazyRow(Modifier.fillMaxWidth().height(112.dp).background(Color.Black.copy(alpha = 0.55f))
                 .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
@@ -67,7 +67,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                 }
             }
             Box(Modifier.weight(1f).fillMaxHeight().padding(start = 8.dp), contentAlignment = Alignment.Center) {
-                if (segment != null) ReviewPanel(session, segment, model, review)
+                if (segment != null) ReviewPanel(session, segment, model, review, onTrim = { onTrim(segment) })
             }
         }
     }
@@ -102,7 +102,7 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
                     ThumbnailResult.Unavailable -> Text("Unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
             }
-            Text("${segment.order} · ${segment.durationMs / 1000}s", style = MaterialTheme.typography.labelSmall)
+            Text("${segment.order} · ${segment.displayDurationMs / 1000}s", style = MaterialTheme.typography.labelSmall)
             Text(disposition, style = MaterialTheme.typography.labelSmall,
                 color = if (segment.kept) Color.White else Color(0xFFF2D4BC))
         }
@@ -112,7 +112,7 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
-    review: SegmentReviewController, readOnly: Boolean = false) {
+    review: SegmentReviewController, readOnly: Boolean = false, onTrim: (() -> Unit)? = null) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(4.dp)) {
         val videoHeight = (maxHeight * 0.45f).coerceIn(64.dp, 240.dp)
         Surface(color = Color(0xF218181E), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
@@ -120,6 +120,9 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(if (readOnly) "Preview segment ${segment.order}" else "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
                     style = MaterialTheme.typography.titleSmall)
+                Text(if (segment.invalidTrimJson != null) "Trim needs attention" else
+                    "${segment.displayDurationMs} ms${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
+                    style = MaterialTheme.typography.labelSmall)
                 val player = review.player
                 if (player != null) {
                     AndroidView(factory = { context ->
@@ -138,6 +141,8 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                 }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (!readOnly) {
+                    if (onTrim != null) TextButton(onClick = onTrim, enabled = !review.saving,
+                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Trim") }
                     val canKeep = segment.kept || session.retainedCount < RecordingEngine.MAX_SEGMENTS
                     Button(onClick = { review.decide(model, true) }, enabled = !review.saving && canKeep,
                         modifier = Modifier.heightIn(min = 48.dp).semantics { selected = segment.kept },

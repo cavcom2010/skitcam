@@ -111,7 +111,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(snapshot.state.name, color = Color.White, style = MaterialTheme.typography.titleSmall)
         val seconds = snapshot.durationMs / 1000
-        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, snapshot.count),
+        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, snapshot.count) + if (snapshot.session?.durationEstimated == true) " · estimated" else "",
             color = Color.White, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
         when (snapshot.state) {
             RecordingState.Ready, RecordingState.Completed -> Button(

@@ -44,9 +44,13 @@ import com.calvinmazhindu.skitcam.arrange.ArrangementViewModel
 import com.calvinmazhindu.skitcam.arrange.ArrangementScreen
 import androidx.compose.ui.semantics.clearAndSetSemantics
 
+import com.calvinmazhindu.skitcam.trim.TrimViewModel
+import com.calvinmazhindu.skitcam.trim.TrimScreen
+
 class MainActivity : ComponentActivity() {
     val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
+    val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
     val arrangementModel: ArrangementViewModel by lazy { ViewModelProvider(this)[ArrangementViewModel::class.java] }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,12 +83,14 @@ private fun MainActivity.CameraScreen() {
     val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
     val review = reviewController
     val arrangement = arrangementModel
-    val arranging = arrangement.draft != null
+    val trimming = trimModel.segment != null
+    val arranging = arrangement.draft != null || trimming
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     LaunchedEffect(snapshot.state, snapshot.session?.id) {
+        if (snapshot.state != RecordingState.Paused || trimModel.sessionId?.let { it != snapshot.session?.id } == true) trimModel.close()
         if (snapshot.state != RecordingState.Paused ||
             review.selection?.sessionId?.let { it != snapshot.session?.id } == true) review.close()
         if (snapshot.state != RecordingState.Paused ||
@@ -168,7 +174,7 @@ private fun MainActivity.CameraScreen() {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
             PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
-                Modifier.fillMaxSize()
+                onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = Modifier.fillMaxSize()
                     .padding(top = top, bottom = if (landscape) 0.dp else bottom,
                         end = if (landscape) 240.dp else 0.dp)
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -190,7 +196,7 @@ private fun MainActivity.CameraScreen() {
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
             RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted,
-                beforeRecording = { review.close(); arrangement.invalidate() },
+                beforeRecording = { trimModel.close(); review.close(); arrangement.invalidate() },
                 onBackground = { review.close() },
                 onArrange = {
                     val current = recordingModel.snapshots.value
@@ -200,9 +206,10 @@ private fun MainActivity.CameraScreen() {
                     }
                 })
         }
-        if (arranging && snapshot.state == RecordingState.Paused && snapshot.session != null) {
+        if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
+        if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
     }
 }
 

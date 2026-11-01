@@ -1,11 +1,11 @@
 # SkitCam
 
 A native Android segment camera built with Kotlin, Jetpack Compose and CameraX.
-Milestone 4 adds touch arrangement with independent playback order, preserving
+Milestone 5 adds non-destructive trimming alongside arrangement, preserving
 the recording engine, live preview, thumbnails and Keep/Discard decisions.
 
 **STOP retains separate MP4 segments and marks the session completed. It does
-not combine them into a final video.** There is no trimming, export,
+not combine them into a final video.** There is no export,
 authentication, backend or network functionality.
 
 ## Recording
@@ -76,6 +76,61 @@ it appends it to the end. New recordings also append. Existing arranged items
 keep their relative order, original filenames and recording numbers. STOP keeps
 the chosen order for future assembly, which is not implemented yet.
 
+## Trim
+
+While Paused, open a segment's review and choose **Trim**. Drag the start/end
+boundaries over the frame timeline, or use 100 ms adjustments and integer
+millisecond entry. Zoom in/out and the position slider support long segments;
+Show start/end brings either handle back into view. The shaded areas are excluded.
+Play previews only the selected interval, including audio; seeking stays within it.
+
+**Save** atomically stores the boundaries. **Cancel** or Back writes nothing.
+**Reset Trim** selects the full verified source in the draft; press Save to retain
+that reset. Save and Cancel return to the PAUSE environment. Reopen review to see
+the saved result and its Trimmed indicator. Arrangement previews also respect
+saved intervals. Discard/Restore and reordering preserve every trim.
+
+Drafts survive backgrounding and activity recreation in memory; playback is
+released and the source is rechecked on return. Process death drops unsaved edits.
+Saved edits survive restart and STOP. The camera remains bound behind the editor;
+recording always releases review/trim playback first.
+
+Preview uses Media3 clipping and exact-seek requests. Decoder preroll, sample
+boundaries and device output timing still apply: **frame-accurate preview or export
+is not claimed**. Timeline thumbnails use approximate sync-frame sampling. No
+source MP4 is rewritten, rendered, combined or deleted by trimming.
+
+### Trim metadata and time convention
+
+Version 4 adds a nullable `trim` object to each segment:
+
+```json
+"trim": {
+  "sourceDurationMs": 4000,
+  "trimStartMs": 300,
+  "trimEndMs": 3500
+}
+```
+
+These are integer Long milliseconds in the normalized source presentation
+timeline. The end is exclusive; effective duration is `trimEndMs - trimStartMs`.
+The minimum is 500 ms. A verified shorter source may retain only its full interval.
+Historic CameraX `durationMs` remains separate and is never overwritten by edits.
+New recordings default to a full range using native post-finalisation inspection.
+Trim resolves the unclipped, seekable Media3 duration and captures native file
+facts; Save rechecks file identity and media validation on the recording worker.
+Untrimmed full-source intent adapts only in the draft. Duration discrepancies
+require explicit review/Save; saved out-of-bounds user cuts
+are not silently clamped. Reset can select the newly verified full duration.
+
+Versions 1–3 load without trim decisions (`trim: null`) and resolve media lazily.
+Legacy recorded durations are explicitly estimates until verified through Trim.
+Malformed v4 trim values round-trip during unrelated saves, display a warning,
+and require a verified Reset followed by Save to repair. Missing/corrupt sources
+cannot be saved. Unknown effective durations are not fabricated; totals containing
+unresolved entries are marked estimated. MP4 identity, history, Keep status and
+playback order remain independent of trim metadata.
+
 ## Build
 
 Requires JDK 17 and an Android SDK containing platform 36 and build tools 35.0.0.
@@ -125,7 +180,7 @@ files/sessions/<session-id>/
 
 Metadata records session state, timestamps, ordered segments, recording duration,
 physical orientation, encoded video rotation, absolute file paths, errors and
-the pending attempt. Version 3 includes immutable segment IDs and a separate
+the pending attempt. Version 4 retains immutable segment IDs and a separate
 `playbackOrder` list of kept IDs. Versions 1/2 load deterministic IDs derived from
 session ID and recording number, with chronological playback order; version 1
 defaults every successful segment to Keep. Legacy metadata upgrades only on a
@@ -152,7 +207,7 @@ Uninstalling the app or clearing its data removes app-specific storage; use
 ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug --no-daemon
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/debug/app-debug.apk
 ~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r -e class com.calvinmazhindu.skitcam.recording.RecordingDeviceTest,com.calvinmazhindu.skitcam.review.PauseEnvironmentDeviceTest,com.calvinmazhindu.skitcam.arrange.ArrangementDeviceTest com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
+~/Android/Sdk/platform-tools/adb -s DEVICE_SERIAL shell am instrument -w -r -e class com.calvinmazhindu.skitcam.recording.RecordingDeviceTest,com.calvinmazhindu.skitcam.review.PauseEnvironmentDeviceTest,com.calvinmazhindu.skitcam.arrange.ArrangementDeviceTest,com.calvinmazhindu.skitcam.trim.TrimDeviceTest com.calvinmazhindu.skitcam.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 JVM tests exercise transitions, duplicate/stale events, finalisation, failure
@@ -205,6 +260,7 @@ official distribution SHA-256. Wrapper files must be retained in source control.
         │   ├── recording/         # State machine, CameraX adapter, metadata,
         │   │                      # orientation, ViewModel and controls
         │   ├── review/            # Lazy thumbnails, review UI and player ownership
+        │   ├── trim/              # Validated ranges, transient editor and timeline
         │   └── arrange/           # In-memory drafts and touch arrangement overlay
         └── res/                   # App name, theme and vector launcher icon
 ```
@@ -214,5 +270,5 @@ official distribution SHA-256. Wrapper files must be retained in source control.
 Check camera/microphone permissions, START/PAUSE/RESUME/STOP, orientation locks,
 background/foreground behavior and retained MP4s. Physical sensor behavior needs
 the phone to be held and rotated; the device engine tests inject a known pose
-while using real CameraX, microphone and storage. See `VALIDATION_M4.md` for the
+while using real CameraX, microphone and storage. See `VALIDATION_M5.md` for the
 current results. Earlier validation reports preserve the Milestone 1 and 2 results.

@@ -259,6 +259,6 @@ class ArrangementDeviceTest {
         await("restore") { model.snapshots.value.count == 3 }
         arrange(); screenshot("restart-fixture")
         text("Cancel"); await("cancelled") { main { editor.draft == null } }
-        leavePaused = true // Newly created fixture only; host performs real process-restart checks.
+        leavePaused = false // Complete this owned fixture so the following Trim suite can run.
     }
 }

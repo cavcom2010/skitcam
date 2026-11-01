@@ -1,5 +1,7 @@
 package com.calvinmazhindu.skitcam.recording
 
+import com.calvinmazhindu.skitcam.trim.SourceFacts
+import com.calvinmazhindu.skitcam.trim.TrimRange
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
@@ -32,6 +34,20 @@ class SessionFileStore(private val root: File) : SessionStore {
             .map { File(it, "session.json") }.filter { it.exists() || File(it.path + ".bak").exists() }
             .maxByOrNull { maxOf(it.lastModified(), File(it.path + ".bak").lastModified()) } ?: return null
         return AtomicFile(metadata).openRead().bufferedReader().use { SessionCodec.decode(it.readText()) }
+    }
+    override fun sourceFacts(path: String): SourceFacts {
+        val file = File(path)
+        check(file.isFile && file.canRead() && file.length() > 0) { "Source is missing or unreadable." }
+        val length = file.length(); val modified = file.lastModified()
+        val retriever = MediaMetadataRetriever()
+        val duration = try {
+            retriever.setDataSource(path)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                ?: error("Source duration unavailable.")
+        } finally { retriever.release() }
+        check(duration in 1..TrimRange.MAX_MS) { "Source duration is invalid." }
+        check(length == file.length() && modified == file.lastModified()) { "Source changed." }
+        return SourceFacts(duration, length, modified)
     }
     override fun validate(path: String): Int {
         val file = File(path)

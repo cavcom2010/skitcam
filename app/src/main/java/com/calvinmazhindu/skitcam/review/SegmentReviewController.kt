@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.review
 
+import com.calvinmazhindu.skitcam.trim.TrimRange
 import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.getValue
@@ -18,6 +19,7 @@ import java.io.File
 data class ReviewSelection(val sessionId: String, val segmentId: String)
 
 /** Activity-owned UI resources, deliberately separate from the durable recording runtime. Main thread only. */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class SegmentReviewController(context: Context) {
     private val application = context.applicationContext
     var selection by mutableStateOf<ReviewSelection?>(null)
@@ -34,7 +36,7 @@ class SegmentReviewController(context: Context) {
         private set
     private var generation = 0
 
-    fun open(sessionId: String, segment: Segment) {
+    fun open(sessionId: String, segment: Segment, fullSource: Boolean = false) {
         close()
         selection = ReviewSelection(sessionId, segment.id)
         val file = File(segment.path)
@@ -49,6 +51,7 @@ class SegmentReviewController(context: Context) {
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             current.addListener(object : Player.Listener {
                 override fun onPlayerError(exception: PlaybackException) {
+                    android.util.Log.w("SkitCamPlayback", "Segment playback failed", exception)
                     if (player === current) {
                         error = "Cannot play this segment. Its file and Keep/Discard status have not been changed."
                         releasePlayer()
@@ -65,12 +68,27 @@ class SegmentReviewController(context: Context) {
                     if (player === current) playbackLabel = if (isPlaying) "Playing" else "Playback paused"
                 }
             })
-            current.setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            current.setMediaItem(item(file, if (fullSource) null else segment.trim?.takeIf { it.valid() }))
+            current.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             current.playWhenReady = false
             current.prepare()
         } catch (_: Exception) {
             error = "Cannot open this segment. The original file has not been changed."
             releasePlayer()
+        }
+    }
+    private fun item(file: File, range: TrimRange?): MediaItem {
+        val builder = MediaItem.Builder().setUri(Uri.fromFile(file))
+        range?.let { builder.setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
+            .setStartPositionMs(it.trimStartMs).setEndPositionMs(it.trimEndMs).build()) }
+        return builder.build()
+    }
+    fun clip(segment: Segment, range: TrimRange) {
+        if (!range.valid()) return
+        player?.let {
+            it.pause()
+            it.setMediaItem(item(File(segment.path), range))
+            it.prepare()
         }
     }
     fun decide(model: RecordingViewModel, kept: Boolean) {

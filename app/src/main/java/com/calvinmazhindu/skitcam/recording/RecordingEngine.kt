@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.recording
 
+import com.calvinmazhindu.skitcam.trim.*
 import java.io.File
 import java.util.UUID
 
@@ -7,13 +8,18 @@ enum class RecordingState { Ready, Starting, Recording, Finalising, Paused, Stop
 
 data class Segment(val order: Int, val path: String, val durationMs: Long,
     val orientationDegrees: Int, val videoRotationDegrees: Int, val kept: Boolean = true,
-    val id: String = UUID.randomUUID().toString())
+    val id: String = UUID.randomUUID().toString(), val trim: TrimRange? = null,
+    val invalidTrimJson: String? = null) {
+    val effectiveDurationMs: Long? get() = trim?.takeIf { it.valid() }?.effectiveDurationMs
+    val displayDurationMs get() = effectiveDurationMs ?: if (invalidTrimJson == null) durationMs.coerceAtLeast(0) else 0L
+}
 data class PendingSegment(val id: String, val path: String, val order: Int)
 data class Session(val id: String, val createdAtMs: Long, val orientationDegrees: Int,
     val state: RecordingState, val segments: List<Segment> = emptyList(),
     val pending: PendingSegment? = null, val error: String? = null,
     val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id }) {
-    val durationMs: Long get() = segments.filter { it.kept }.sumOf { it.durationMs }
+    val durationMs: Long get() = safeDurationSum(segments.filter { it.kept }.map { it.displayDurationMs })
+    val durationEstimated get() = segments.any { it.kept && it.trim == null }
     val retainedCount: Int get() = segments.count { it.kept }
     val playbackSegments: List<Segment> get() {
         val byId = segments.associateBy { it.id }
@@ -28,7 +34,7 @@ data class Session(val id: String, val createdAtMs: Long, val orientationDegrees
 data class RecordingSnapshot(val state: RecordingState = RecordingState.Ready,
     val session: Session? = null, val activeDurationMs: Long = 0,
     val message: String? = null, val unresolved: Boolean = false) {
-    val durationMs get() = (session?.durationMs ?: 0) + activeDurationMs
+    val durationMs get() = safeDurationSum(listOf(session?.durationMs ?: 0, activeDurationMs))
     val count get() = session?.retainedCount ?: 0
     val openSession get() = session != null && state != RecordingState.Completed
 }
@@ -49,6 +55,7 @@ interface SessionStore {
     fun loadLatest(): Session?
     fun freeBytes(): Long
     /** Must verify a nonempty MP4 containing video and audio. Returns encoded rotation. */
+    fun sourceFacts(path: String): SourceFacts? = null
     fun validate(path: String): Int
 }
 fun interface Cancellation { fun cancel() }
@@ -185,6 +192,28 @@ class RecordingEngine(
             SegmentEditResult(false, "Could not save the decision. The previous status and original file are unchanged.")
         }
     }
+    fun saveTrim(sessionId: String, segmentId: String, expected: Segment, source: TrimSource,
+        range: TrimRange): SegmentEditResult {
+        if (snapshot.state != RecordingState.Paused || activeId != null)
+            return SegmentEditResult(false, "Trimming is only available while paused.")
+        val session = snapshot.session ?: return SegmentEditResult(false, "No session.")
+        val segment = session.segments.find { it.id == segmentId }
+        if (session.id != sessionId || segment == null || segment != expected)
+            return SegmentEditResult(false, "The segment changed. Cancel and reopen Trim.")
+        if (!range.valid() || range.sourceDurationMs != source.presentationDurationMs) return SegmentEditResult(false, "Invalid trim range or unverified duration.")
+        return try {
+            store.validate(segment.path)
+            check(source.facts.durationMs > 0 && store.sourceFacts(segment.path) == source.facts) { "Source changed or unavailable. Reopen Trim." }
+            val updated = session.copy(segments = session.segments.map {
+                if (it.id == segmentId) it.copy(trim = range, invalidTrimJson = null) else it
+            })
+            store.save(updated)
+            publish(session = updated)
+            SegmentEditResult(true)
+        } catch (e: Exception) {
+            SegmentEditResult(false, e.message ?: "Could not save trim. Previous metadata is retained.")
+        }
+    }
     fun savePlaybackOrder(sessionId: String, expectedOrder: List<String>, order: List<String>): SegmentEditResult {
         if (snapshot.state != RecordingState.Paused || activeId != null) {
             return SegmentEditResult(false, "Arrangement can only be saved while paused.")
@@ -287,8 +316,9 @@ class RecordingEngine(
             val pending = session.pending!!
             check(event.durationMs > 0) { "Recording contained no valid duration." }
             val rotation = store.validate(pending.path)
+            val source = store.sourceFacts(pending.path)
             val segment = Segment(pending.order, pending.path, event.durationMs,
-                session.orientationDegrees, rotation, id = pending.id)
+                session.orientationDegrees, rotation, id = pending.id, trim = source?.let { TrimRange.full(it.durationMs) })
             val next = when {
                 terminalReason != null -> RecordingState.Error
                 requestedState == RecordingState.Stopping -> RecordingState.Completed

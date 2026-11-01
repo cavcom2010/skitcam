@@ -187,7 +187,7 @@ private fun ArrangementRow(segment: Segment, index: Int, count: Int, wide: Boole
                 Column(Modifier.weight(1f)) {
                     Text("${index + 1}. Segment ${segment.order}", style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    Text("%02d:%02d".format(segment.durationMs / 60000, segment.durationMs / 1000 % 60), style = MaterialTheme.typography.bodySmall)
+                    Text("%02d:%02d".format(segment.displayDurationMs / 60000, segment.displayDurationMs / 1000 % 60), style = MaterialTheme.typography.bodySmall)
                 }
                 if (wide) RowActions(segment, index, count, interactive, onPreview, onMove)
                 Box(handle, contentAlignment = Alignment.Center) { Text("≡", style = MaterialTheme.typography.headlineMedium) }

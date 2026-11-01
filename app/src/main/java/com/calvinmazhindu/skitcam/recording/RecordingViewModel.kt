@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.recording
 
+import com.calvinmazhindu.skitcam.trim.*
 import android.Manifest
 import android.app.Application
 import android.content.pm.PackageManager
@@ -35,6 +36,8 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
         runtime.setSegmentKept(sessionId, segmentId, kept, finished)
     fun savePlaybackOrder(sessionId: String, expected: List<String>, order: List<String>, finished: (SegmentEditResult) -> Unit) =
         runtime.savePlaybackOrder(sessionId, expected, order, finished)
+    fun saveTrim(sessionId: String, segment: Segment, source: TrimSource, range: TrimRange, finished: (SegmentEditResult) -> Unit) =
+        runtime.saveTrim(sessionId, segment, source, range, finished)
     fun background() = runtime.background()
     fun cameraError() = runtime.cameraError()
     override fun onCleared() { runtime.background() }
@@ -82,6 +85,12 @@ private class RecordingRuntime(private val application: Application) {
         val proposed = order.toList()
         worker.execute {
             val result = engine.savePlaybackOrder(sessionId, baseline, proposed)
+            main.post { finished(result) }
+        }
+    }
+    fun saveTrim(sessionId: String, segment: Segment, source: TrimSource, range: TrimRange, finished: (SegmentEditResult) -> Unit) {
+        worker.execute {
+            val result = engine.saveTrim(sessionId, segment.id, segment, source, range)
             main.post { finished(result) }
         }
     }
