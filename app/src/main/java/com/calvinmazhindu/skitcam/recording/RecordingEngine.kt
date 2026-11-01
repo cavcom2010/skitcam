@@ -1,0 +1,253 @@
+package com.calvinmazhindu.skitcam.recording
+
+import java.io.File
+import java.util.UUID
+
+enum class RecordingState { Ready, Starting, Recording, Finalising, Paused, Stopping, Completed, Error }
+
+data class Segment(val order: Int, val path: String, val durationMs: Long,
+    val orientationDegrees: Int, val videoRotationDegrees: Int)
+data class PendingSegment(val id: String, val path: String, val order: Int)
+data class Session(val id: String, val createdAtMs: Long, val orientationDegrees: Int,
+    val state: RecordingState, val segments: List<Segment> = emptyList(),
+    val pending: PendingSegment? = null, val error: String? = null) {
+    val durationMs: Long get() = segments.sumOf { it.durationMs }
+}
+data class RecordingSnapshot(val state: RecordingState = RecordingState.Ready,
+    val session: Session? = null, val activeDurationMs: Long = 0,
+    val message: String? = null, val unresolved: Boolean = false) {
+    val durationMs get() = (session?.durationMs ?: 0) + activeDurationMs
+    val count get() = session?.segments?.size ?: 0
+    val openSession get() = session != null && state != RecordingState.Completed
+}
+
+sealed interface RecorderEvent {
+    data object Started : RecorderEvent
+    data class Status(val durationMs: Long, val audioError: Boolean = false) : RecorderEvent
+    data class Finalized(val durationMs: Long, val error: String? = null) : RecorderEvent
+}
+fun interface RecordingHandle { fun stop() }
+interface RecordingPort {
+    fun start(pending: PendingSegment, orientationDegrees: Int,
+        listener: (RecorderEvent) -> Unit): RecordingHandle
+}
+interface SessionStore {
+    val rootPath: String
+    fun save(session: Session)
+    fun loadLatest(): Session?
+    fun freeBytes(): Long
+    /** Must verify a nonempty MP4 containing video and audio. Returns encoded rotation. */
+    fun validate(path: String): Int
+}
+fun interface Cancellation { fun cancel() }
+fun interface Watchdog { fun schedule(callback: () -> Unit): Cancellation }
+
+/** All commands, events and store calls run on one worker. Camera operations are adapted by the port. */
+class RecordingEngine(
+    private val recorder: RecordingPort,
+    private val store: SessionStore,
+    private val watchdog: Watchdog,
+    private val availability: () -> String? = { null },
+    private val changed: (RecordingSnapshot) -> Unit = {},
+    private val now: () -> Long = System::currentTimeMillis
+) {
+    companion object {
+        const val MAX_SEGMENTS = 100
+        const val START_RESERVE = 100L * 1024 * 1024
+        const val STOP_RESERVE = 50L * 1024 * 1024
+        const val COMPLETED_MESSAGE = "Session completed. Individual MP4 files retained; combining is not implemented."
+    }
+    var snapshot = RecordingSnapshot()
+        private set
+    private var activeId: String? = null
+    private var handle: RecordingHandle? = null
+    private var timer: Cancellation? = null
+    private var terminalReason: String? = null
+
+    private fun publish(state: RecordingState = snapshot.state, session: Session? = snapshot.session,
+        duration: Long = snapshot.activeDurationMs, message: String? = snapshot.message) {
+        snapshot = RecordingSnapshot(state, session, duration, message, activeId != null)
+        changed(snapshot)
+    }
+    private fun persist(session: Session) {
+        store.save(session)
+        publish(session.state, session)
+    }
+    private fun fail(message: String) {
+        terminalReason = message
+        val session = snapshot.session?.copy(state = RecordingState.Error, error = message)
+        publish(RecordingState.Error, session, duration = if (activeId == null) 0 else snapshot.activeDurationMs,
+            message = message)
+        if (session != null) {
+            try { store.save(session) } catch (_: Exception) {
+                publish(message = "$message Metadata could not be saved; existing files are retained.")
+            }
+        }
+    }
+    fun restore() {
+        if (snapshot.state != RecordingState.Ready) return
+        try {
+            val session = store.loadLatest() ?: return
+            publish(session.state, session, 0,
+                if (session.state == RecordingState.Completed) COMPLETED_MESSAGE else session.error)
+            if (session.state in setOf(RecordingState.Starting, RecordingState.Recording,
+                    RecordingState.Finalising, RecordingState.Stopping)) {
+                fail("Recording was interrupted. Confirmed segments and the unfinished file are retained. STOP closes this session.")
+            }
+        } catch (_: Exception) {
+            fail("Session metadata could not be read. Files are retained. STOP acknowledges this error.")
+        }
+    }
+    fun start(orientation: Int?) {
+        if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed) || activeId != null) return
+        if (!checkOrientation(orientation, null)) return
+        val unavailable = availability()
+        if (unavailable != null) { publish(message = unavailable); return }
+        val id = UUID.randomUUID().toString()
+        terminalReason = null
+        publish(RecordingState.Starting, Session(id, now(), orientation!!, RecordingState.Starting), 0, null)
+        beginSegment()
+    }
+    fun resume(orientation: Int?) {
+        if (snapshot.state != RecordingState.Paused || activeId != null) return
+        if (snapshot.count >= MAX_SEGMENTS) { publish(message = "100 segment limit reached. Press STOP."); return }
+        if (!checkOrientation(orientation, snapshot.session!!.orientationDegrees)) return
+        val unavailable = availability()
+        if (unavailable != null) { publish(message = unavailable); return }
+        publish(RecordingState.Starting, duration = 0, message = null)
+        beginSegment()
+    }
+    private fun checkOrientation(actual: Int?, expected: Int?): Boolean {
+        if (actual !in setOf(0, 90, 180, 270) || (expected != null && actual != expected)) {
+            publish(message = "Hold the phone upright in ${expected?.let { "the original $it° direction" } ?: "a stable orientation"} before recording.")
+            return false
+        }
+        return true
+    }
+    private fun beginSegment() {
+        try {
+            check(store.freeBytes() >= START_RESERVE) { "Low storage: at least 100 MiB free is required." }
+            val session = snapshot.session!!
+            val order = session.segments.size + 1
+            val pending = PendingSegment(UUID.randomUUID().toString(),
+                File(File(store.rootPath, session.id), "segment_%03d.mp4".format(order)).absolutePath, order)
+            // Journal the candidate before CameraX can create it. Never reuse an attempted path.
+            persist(session.copy(state = RecordingState.Starting, pending = pending))
+            activeId = pending.id
+            publish(message = null)
+            armWatchdog("Camera did not start in time.")
+            handle = recorder.start(pending, session.orientationDegrees) { event -> onEvent(pending.id, event) }
+        } catch (exception: Exception) {
+            timer?.cancel()
+            activeId = null
+            handle = null
+            fail(exception.message ?: "Unable to start recording.")
+        }
+    }
+    fun pause() {
+        if (snapshot.state == RecordingState.Recording) requestFinalization(RecordingState.Finalising)
+    }
+    fun stop() {
+        when (snapshot.state) {
+            RecordingState.Recording -> requestFinalization(RecordingState.Stopping)
+            RecordingState.Paused, RecordingState.Error -> if (activeId == null) {
+                try {
+                    val session = snapshot.session
+                    if (session != null) persist(session.copy(state = RecordingState.Completed))
+                    publish(RecordingState.Completed, duration = 0,
+                        message = COMPLETED_MESSAGE)
+                } catch (_: Exception) { fail("Could not complete session metadata. Files are retained.") }
+            }
+            else -> Unit
+        }
+    }
+    fun background() {
+        if (snapshot.state in setOf(RecordingState.Starting, RecordingState.Recording)) {
+            requestFinalization(RecordingState.Finalising, "Paused because SkitCam left the foreground.")
+        }
+    }
+    fun interruption(reason: String) {
+        if (activeId != null && snapshot.state in setOf(RecordingState.Starting, RecordingState.Recording)) {
+            terminalReason = reason
+            requestFinalization(RecordingState.Finalising, reason)
+        } else if (snapshot.openSession && activeId == null && snapshot.state != RecordingState.Error) {
+            fail(reason)
+        }
+    }
+    private fun requestFinalization(state: RecordingState, message: String? = null) {
+        publish(state, message = message)
+        // Stop immediately; journaling must not delay the stop request.
+        try { handle?.stop() } catch (exception: Exception) {
+            terminalReason = exception.message ?: "Could not stop recording."
+        }
+        armWatchdog("Finalisation timed out. No new recording can begin until it resolves. Files are retained.")
+        try { persist(snapshot.session!!.copy(state = state)) }
+        catch (_: Exception) { terminalReason = "Unable to save session metadata. Files are retained." }
+    }
+    private fun armWatchdog(message: String) {
+        timer?.cancel()
+        val id = activeId
+        timer = watchdog.schedule {
+            if (id != null && id == activeId) {
+                try { handle?.stop() } catch (_: Exception) { /* Await the correlated final event. */ }
+                fail(message)
+            }
+        }
+    }
+    private fun onEvent(id: String, event: RecorderEvent) {
+        if (id != activeId) return
+        when (event) {
+            RecorderEvent.Started -> if (snapshot.state == RecordingState.Starting) {
+                timer?.cancel()
+                try { persist(snapshot.session!!.copy(state = RecordingState.Recording)) }
+                catch (_: Exception) { interruption("Recording metadata could not be saved."); return }
+                publish(RecordingState.Recording)
+            }
+            is RecorderEvent.Status -> {
+                publish(duration = event.durationMs)
+                if (snapshot.state == RecordingState.Recording) {
+                    try {
+                        when {
+                            event.audioError -> interruption("Microphone recording failed. Earlier segments are retained.")
+                            store.freeBytes() < STOP_RESERVE -> interruption("Low storage: recording stopped to preserve files.")
+                        }
+                    } catch (_: Exception) { interruption("Storage is unavailable. Files are retained.") }
+                }
+            }
+            is RecorderEvent.Finalized -> finalized(event)
+        }
+    }
+    private fun finalized(event: RecorderEvent.Finalized) {
+        timer?.cancel()
+        val requestedState = snapshot.state
+        activeId = null
+        handle = null
+        if (event.error != null) { fail(event.error); return }
+        try {
+            val session = snapshot.session!!
+            val pending = session.pending!!
+            check(event.durationMs > 0) { "Recording contained no valid duration." }
+            val rotation = store.validate(pending.path)
+            val segment = Segment(pending.order, pending.path, event.durationMs,
+                session.orientationDegrees, rotation)
+            val next = when {
+                terminalReason != null -> RecordingState.Error
+                requestedState == RecordingState.Stopping -> RecordingState.Completed
+                requestedState == RecordingState.Finalising -> RecordingState.Paused
+                else -> RecordingState.Error
+            }
+            val message = terminalReason ?: when (next) {
+                RecordingState.Completed -> COMPLETED_MESSAGE
+                RecordingState.Error -> "Recording ended unexpectedly. The successful segment is retained."
+                else -> if (segment.order == MAX_SEGMENTS) "100 segment limit reached. Press STOP." else snapshot.message
+            }
+            // UI count changes only after durable registration, never when stop() is called.
+            val updated = session.copy(state = next, segments = session.segments + segment,
+                pending = null, error = if (next == RecordingState.Error) message else null)
+            store.save(updated)
+            publish(next, updated, 0, message)
+        } catch (exception: Exception) {
+            fail("${exception.message ?: "Segment could not be registered."} Files are retained.")
+        }
+    }
+}

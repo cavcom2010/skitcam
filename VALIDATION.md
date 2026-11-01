@@ -1,5 +1,8 @@
 # Validation — 2026-11-01
 
+Historical Milestone 1 results. The current Milestone 2 implementation and APK
+are documented in `VALIDATION_M2.md`; the artifact hash below refers to Milestone 1.
+
 ## Result
 
 The debug APK built, installed and launched successfully on the connected

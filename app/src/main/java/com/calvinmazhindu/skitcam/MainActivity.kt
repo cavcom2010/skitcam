@@ -14,9 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,16 +24,18 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.ViewModelProvider
+import com.calvinmazhindu.skitcam.recording.RecordingControls
+import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 
 class MainActivity : ComponentActivity() {
+    val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -47,6 +47,10 @@ class MainActivity : ComponentActivity() {
                 CameraScreen()
             }
         }
+    }
+    override fun onPause() {
+        recordingModel.background()
+        super.onPause()
     }
 }
 
@@ -94,7 +98,7 @@ private fun MainActivity.CameraScreen() {
 
     Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
         if (granted) {
-            CameraPreview(Modifier.fillMaxSize())
+            CameraPreview(recordingModel, Modifier.fillMaxSize())
         } else {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -125,7 +129,7 @@ private fun MainActivity.CameraScreen() {
                 style = MaterialTheme.typography.labelSmall)
         }
         Column(
-            (if (landscape) Modifier.align(Alignment.CenterEnd).width(192.dp).fillMaxHeight()
+            (if (landscape) Modifier.align(Alignment.CenterEnd).width(240.dp).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
@@ -136,17 +140,7 @@ private fun MainActivity.CameraScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
-            val label = stringResource(R.string.recording_unavailable)
-            Button(
-                onClick = {}, enabled = false, shape = CircleShape,
-                modifier = Modifier.size(76.dp).border(2.dp, Color(0xFF79797E), CircleShape)
-                    .semantics { contentDescription = label },
-                contentPadding = PaddingValues(10.dp),
-                colors = ButtonDefaults.buttonColors(disabledContainerColor = Color(0xFF29292E))
-            ) {
-                Box(Modifier.size(46.dp).background(Color(0xFF855151), CircleShape))
-            }
-            Text(label, color = Color(0xFFCBCBD0), style = MaterialTheme.typography.labelMedium)
+            RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted)
         }
     }
 }
@@ -156,7 +150,7 @@ internal fun CameraMessage(message: String, action: String? = null, onAction: ()
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
     Box(Modifier.fillMaxSize().safeDrawingPadding().padding(
-        start = 32.dp, end = if (landscape) 192.dp else 32.dp,
+        start = 32.dp, end = if (landscape) 240.dp else 32.dp,
         top = if (landscape) 88.dp else 150.dp, bottom = if (landscape) 32.dp else 150.dp),
         contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally,

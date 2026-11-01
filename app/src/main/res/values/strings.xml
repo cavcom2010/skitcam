@@ -9,5 +9,4 @@
     <string name="camera_error">Camera unavailable. Check camera access and close other camera apps, then try again.</string>
     <string name="try_again">Try again</string>
     <string name="rear_camera">REAR CAMERA</string>
-    <string name="recording_unavailable">Recording unavailable</string>
 </resources>

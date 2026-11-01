@@ -15,11 +15,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 
 private enum class PreviewStatus { Loading, Streaming, Error }
 
 @Composable
-internal fun CameraPreview(modifier: Modifier = Modifier) {
+internal fun CameraPreview(model: RecordingViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val view = remember(context) {
@@ -41,12 +42,14 @@ internal fun CameraPreview(modifier: Modifier = Modifier) {
             if (state.error != null) {
                 Log.w("SkitCam", "Camera error: ${state.error?.code}")
                 status = PreviewStatus.Error
+                model.cameraError()
             }
         }
         val streamObserver = Observer<PreviewView.StreamState> { stream ->
             if (stream == PreviewView.StreamState.STREAMING) {
                 Log.d("SkitCam", "Rear-camera preview streaming")
                 status = PreviewStatus.Streaming
+                model.cameraReady = true
             }
         }
         view.previewStreamState.observe(lifecycleOwner, streamObserver)
@@ -64,7 +67,7 @@ internal fun CameraPreview(modifier: Modifier = Modifier) {
                     }
                     preview = useCase
                     val camera = cameraProvider.bindToLifecycle(
-                        lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, useCase
+                        lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, useCase, model.port.capture
                     )
                     cameraState = camera.cameraInfo.cameraState.also {
                         it.observe(lifecycleOwner, stateObserver)
@@ -72,14 +75,18 @@ internal fun CameraPreview(modifier: Modifier = Modifier) {
                 } catch (exception: Exception) {
                     Log.e("SkitCam", "Unable to start rear-camera preview", exception)
                     status = PreviewStatus.Error
+                    model.cameraError()
                 }
             }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
+            model.cameraReady = false
+            model.background()
             disposed = true
             view.previewStreamState.removeObserver(streamObserver)
             cameraState?.removeObserver(stateObserver)
             preview?.let { provider?.unbind(it) }
+            provider?.unbind(model.port.capture)
         }
     }
 
