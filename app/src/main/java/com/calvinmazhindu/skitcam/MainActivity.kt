@@ -66,7 +66,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    override fun onResume() {
+        super.onResume()
+        recordingModel.audio.foreground(true)
+    }
     override fun onPause() {
+        recordingModel.audio.foreground(false)
         arrangementModel.cancelDrag()
         reviewController.close()
         recordingModel.background()
@@ -162,8 +167,9 @@ private fun MainActivity.CameraScreen() {
         Box(Modifier.fillMaxWidth().height(140.dp).background(
             Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))
         ))
+        Column(Modifier.fillMaxWidth().onSizeChanged { headerHeight = it.height }) {
         Row(
-            Modifier.fillMaxWidth().onSizeChanged { headerHeight = it.height }
+            Modifier.fillMaxWidth()
                 .then(if (arranging) Modifier.clearAndSetSemantics {} else Modifier)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))
                 .padding(start = 24.dp, top = 24.dp, bottom = 24.dp,
@@ -174,6 +180,9 @@ private fun MainActivity.CameraScreen() {
             Text(stringResource(R.string.app_name), color = Color.White, style = MaterialTheme.typography.titleLarge)
             Text(stringResource(R.string.rear_camera), color = Color.White.copy(alpha = 0.75f),
                 style = MaterialTheme.typography.labelSmall)
+        }
+        if (!arranging && review.selection == null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio,
+            Modifier.padding(start = 24.dp, end = if (landscape) 264.dp else 24.dp))
         }
         if (!arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }

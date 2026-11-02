@@ -1,7 +1,8 @@
 # SkitCam
 
 A native Android segment camera built with Kotlin, Jetpack Compose and CameraX.
-Milestone 6 adds automatic MP4 finishing after STOP. The export pipeline respects
+Milestone 7 adds truthful microphone discovery, recording audio-level feedback
+and safe pauses on external-input loss. Milestone 6 provides automatic MP4 finishing after STOP. The export pipeline respects
 Keep/Discard, saved playback order and non-destructive trim boundaries. Original
 recordings and session metadata remain in app-specific storage.
 
@@ -42,6 +43,37 @@ Returning never resumes automatically. Errors retain confirmed segments and any
 unfinished candidate file; press STOP to close a settled error before START.
 An unresolved finalisation blocks new recordings, including after closing and
 reopening the activity. A 30-second watchdog reports a stuck operation.
+
+## Microphones and audio status
+
+Audio routing remains **Automatic — managed by Android**. CameraX 1.5.3 does not
+expose supported per-device input selection, so SkitCam has a read-only audio
+input panel rather than a misleading selector. It lists recording endpoints,
+including built-in, USB, wired and exposed Bluetooth inputs. Connected receivers
+are not reported as active merely because they are present.
+
+Tap the compact microphone indicator to inspect connected inputs and Android's
+reported camcorder routes. CameraX does not expose its audio session identifier,
+so those observations remain explicitly **unverified for SkitCam**. No hidden APIs,
+Bluetooth SCO forcing, communication-mode changes or parallel AudioRecord capture
+are used. The meter shows CameraX's sampled relative peak during recording only;
+it is neither calibrated loudness nor proof of microphone identity. Zero level
+alone is not an audio error. Muted, silenced, failed and unavailable audio have
+separate labels, and stale samples stop displaying as live.
+
+If an external recording endpoint disappears, SkitCam conservatively finalises
+the current segment and pauses, even if that endpoint's use was unverified.
+It also pauses on a reported route change for the same observed capture session.
+Check the input and press RESUME explicitly; reconnecting does not resume capture.
+For phone-microphone fallback, disconnect external audio inputs, resume and check
+a test recording. SkitCam cannot force built-in routing through this CameraX API.
+Original files, saved edits and export behavior are preserved.
+
+Only built-in hardware is currently available for Milestone 7 validation.
+External USB/wired/Bluetooth routing tests remain pending. Milestone 7.1 corrects
+a reproduced leading-audio-gap composition problem while retaining the existing
+verification limits; see [VALIDATION_M7_1.md](VALIDATION_M7_1.md). See
+[VALIDATION_M7.md](VALIDATION_M7.md) for actual results and limitations.
 
 ## PAUSE environment
 

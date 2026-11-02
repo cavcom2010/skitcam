@@ -210,4 +210,20 @@ class RecordingEngineTest {
         assertEquals(RecordingState.Completed, restored.snapshot.state)
         assertTrue(restored.snapshot.message!!.contains("Original MP4 files retained"))
     }
+    @Test fun audioRouteChangeFinalisesOnceAndRequiresExplicitResume() {
+        begin();engine.pauseForAudioChange("Input disconnected");engine.pauseForAudioChange("Duplicate")
+        assertEquals(RecordingState.Finalising,engine.snapshot.state);assertEquals(1,recorder.stops)
+        assertEquals(0,engine.snapshot.count);recorder.done()
+        assertEquals(RecordingState.Paused,engine.snapshot.state);assertEquals(1,engine.snapshot.count)
+        engine.pauseForAudioChange("While paused");assertEquals(RecordingState.Paused,engine.snapshot.state)
+        engine.resume(0);recorder.started();assertEquals(RecordingState.Recording,engine.snapshot.state)
+    }
+    @Test fun audioRouteChangeDuringStartingAndStoppingIsSafe() {
+        engine.pauseForAudioChange("Idle");assertEquals(RecordingState.Ready,engine.snapshot.state)
+        engine.start(0);engine.pauseForAudioChange("Removed");recorder.started();recorder.done()
+        assertEquals(RecordingState.Paused,engine.snapshot.state)
+        engine.resume(0);recorder.started();engine.stop();engine.pauseForAudioChange("Stopping")
+        assertEquals(RecordingState.Stopping,engine.snapshot.state);recorder.done()
+        assertEquals(RecordingState.Completed,engine.snapshot.state);assertEquals(2,engine.snapshot.count)
+    }
 }

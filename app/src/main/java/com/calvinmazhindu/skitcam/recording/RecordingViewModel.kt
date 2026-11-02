@@ -25,6 +25,7 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     // One engine per process: finishing/reopening an activity cannot bypass an unresolved recording.
     private val runtime = runtime(application)
     val snapshots get() = runtime.snapshots
+    val audio get() = runtime.audio
     val port get() = runtime.port
     val cameraAvailability get() = runtime.cameraAvailability
     var cameraReady: Boolean
@@ -50,7 +51,9 @@ private class RecordingRuntime(private val application: Application) {
     private val main = Handler(Looper.getMainLooper())
     private val state = MutableStateFlow(RecordingSnapshot())
     val snapshots = state.asStateFlow()
-    val port = CameraRecordingPort(application, worker)
+    val audio = com.calvinmazhindu.skitcam.audio.AudioMonitor(application, ::audioChanged)
+    val port = CameraRecordingPort(application, worker, audio)
+    private fun audioChanged(reason: String) { worker.execute { engine.pauseForAudioChange(reason) } }
     private val camera = MutableStateFlow(false)
     val cameraAvailability = camera.asStateFlow()
     var cameraReady: Boolean

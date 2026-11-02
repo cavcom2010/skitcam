@@ -164,6 +164,10 @@ class RecordingEngine(
             fail(exception.message ?: "Unable to start recording.")
         }
     }
+    fun pauseForAudioChange(reason: String) {
+        if (snapshot.state in setOf(RecordingState.Starting, RecordingState.Recording))
+            requestFinalization(RecordingState.Finalising, reason)
+    }
     fun pause() {
         if (snapshot.state == RecordingState.Recording) requestFinalization(RecordingState.Finalising)
     }

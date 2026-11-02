@@ -12,7 +12,7 @@ import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
-class CameraRecordingPort(private val context: Context, private val events: Executor) : RecordingPort {
+class CameraRecordingPort(private val context: Context, private val events: Executor, private val audio: com.calvinmazhindu.skitcam.audio.AudioMonitor) : RecordingPort {
     val capture: VideoCapture<Recorder> = VideoCapture.withOutput(Recorder.Builder()
         .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)))
         .build())
@@ -40,19 +40,25 @@ class CameraRecordingPort(private val context: Context, private val events: Exec
                 val lock = checkNotNull(beforeStart) { "Camera screen is no longer available." }
                 lock(orientationDegrees)
                 capture.targetRotation = rotationFor(orientationDegrees)
+                audio.begin(pending.id)
                 recording = capture.output.prepareRecording(context, FileOutputOptions.Builder(File(pending.path)).build())
                     .withAudioEnabled().start(events) { event ->
                         when (event) {
                             is VideoRecordEvent.Start -> listener(RecorderEvent.Started)
-                            is VideoRecordEvent.Status -> listener(RecorderEvent.Status(
+                            is VideoRecordEvent.Status -> {
+                                main.execute { audio.sample(pending.id, event.recordingStats.audioStats) }
+                                listener(RecorderEvent.Status(
                                 event.recordingStats.recordedDurationNanos / 1_000_000,
                                 event.recordingStats.audioStats.hasError() ||
-                                    event.recordingStats.audioStats.audioState == AudioStats.AUDIO_STATE_SOURCE_SILENCED))
+                                    event.recordingStats.audioStats.audioState != AudioStats.AUDIO_STATE_ACTIVE))
+                            }
                             is VideoRecordEvent.Finalize -> {
                                 Log.i("SkitCam", "Segment finalised: error=${event.error}, file=${pending.path}")
-                                main.execute { recording = null; activeStop = null }
+                                main.execute { recording = null; activeStop = null; audio.finish(pending.id) }
                                 listener(RecorderEvent.Finalized(event.recordingStats.recordedDurationNanos / 1_000_000,
                                     if (event.hasError()) "CameraX finalisation failed (code ${event.error}). File retained, not registered."
+                                    else if (event.recordingStats.audioStats.hasError() || event.recordingStats.audioStats.audioState != AudioStats.AUDIO_STATE_ACTIVE)
+                                        "Microphone was unavailable at finalisation. File retained, not registered."
                                     else null))
                             }
                         }
@@ -60,6 +66,7 @@ class CameraRecordingPort(private val context: Context, private val events: Exec
                 activeStop = { if (stopped.compareAndSet(false, true)) recording?.stop() }
                 if (stopped.get()) recording?.stop()
             } catch (exception: Exception) {
+                audio.finish(pending.id)
                 events.execute { listener(RecorderEvent.Finalized(0, exception.message ?: "Camera recording failed.")) }
             }
         }

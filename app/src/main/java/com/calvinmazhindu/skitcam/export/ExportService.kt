@@ -99,7 +99,11 @@ class ExportService : Service() {
                     if(current?.sessionId==id && current.state==ExportState.Exporting) ExportJournal.status.value=current.copy(message=percent?.let { "Encoding · $it%" } ?: "Encoding video")
                 }
                 ExportJournal.update(this,id,ExportState.Verifying)
-                val report=verify(candidate,spec.durationMs)
+                val report=verify(candidate,spec.durationMs) { timing ->
+                    val checkpoint=ExportJournal.read(this,id)!!
+                    checkpoint.put("timingDiagnostic",timing)
+                    ExportJournal.write(this,id,checkpoint)
+                }
                 job=ExportJournal.read(this,id)!!;job.put("verifiedSha",report.getString("sha256")).put("verification",report)
                 ExportJournal.write(this,id,job)
             }

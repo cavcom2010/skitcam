@@ -82,6 +82,7 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
                 override fun videoNeedsEncoding()=true
             }
             transformer=Transformer.Builder(context).setLooper(thread.looper).setEncoderFactory(factory)
+                .setAssetLoaderFactory(LeadingAudioGapFactory(context))
                 .setVideoMimeType(MimeTypes.VIDEO_H264).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, result: ExportResult) { finished.countDown() }
@@ -111,9 +112,10 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
 }
 
 /** Full decode without speaker playback or retaining decoded frames. */
-internal fun verify(file: File, expectedMs: Long): JSONObject {
+internal fun verify(file: File, expectedMs: Long, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
     inspect(file)
     val spans=mutableListOf<Pair<Long,Long>>()
+    val measured=JSONArray()
     for(type in listOf("video/","audio/")) {
         val extractor=MediaExtractor();var codec: MediaCodec?=null
         try {
@@ -126,6 +128,9 @@ internal fun verify(file: File, expectedMs: Long): JSONObject {
             codec=MediaCodec.createDecoderByType(mime);codec.configure(format,null,null,0);codec.start()
             var inputDone=false;var outputDone=false;val order=PresentationOrder();var count=0
             val info=MediaCodec.BufferInfo();var lastWork=System.nanoTime()
+            var pcmEnd: Long? = null
+            var pcmFrames = 0L
+            var outputFormat: MediaFormat? = null
             while(!outputDone) {
                 checkCancelled();check(System.nanoTime()-lastWork<TimeUnit.SECONDS.toNanos(30)) { "Output decoder stalled." }
                 if(!inputDone) {
@@ -137,19 +142,41 @@ internal fun verify(file: File, expectedMs: Long): JSONObject {
                     }
                 }
                 val index=codec.dequeueOutputBuffer(info,1000)
+                if(index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) outputFormat=codec.outputFormat
                 if(index>=0) {
                     lastWork=System.nanoTime()
-                    if(info.size>0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG==0) { order.accept(info.presentationTimeUs);count++ }
+                    if(info.size>0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG==0) {
+                        order.accept(info.presentationTimeUs);count++
+                        if(type=="audio/") {
+                            val decoded=outputFormat ?: codec.outputFormat
+                            // Per MediaCodec documentation, raw decoder PCM defaults to signed 16-bit.
+                            val encoding=if(decoded.containsKey(MediaFormat.KEY_PCM_ENCODING)) decoded.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
+                            val bytes=when(encoding) { AudioFormat.ENCODING_PCM_16BIT -> 2; AudioFormat.ENCODING_PCM_FLOAT -> 4; else -> null }
+                            if(bytes!=null) {
+                                val frames=TimingMeasurement.pcmFrames(info.size, decoded.getInteger(MediaFormat.KEY_CHANNEL_COUNT), bytes)
+                                pcmFrames=Math.addExact(pcmFrames,frames)
+                                pcmEnd=TimingMeasurement.endUs(info.presentationTimeUs,frames,decoded.getInteger(MediaFormat.KEY_SAMPLE_RATE))
+                            }
+                        }
+                    }
                     outputDone=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0
                     codec.releaseOutputBuffer(index,false)
                 }
             }
             require(count>0 && order.first!=null && order.last!=null) { "Output $type contains no decoded samples." }
             spans+=order.first!! to order.last!!
+            val trace=DecodedTiming(order.first!!,order.last!!,count.toLong(),pcmEnd)
+            measured.put(JSONObject().put("track",type).put("firstPtsUs",trace.firstPtsUs).put("lastPtsUs",trace.lastPtsUs)
+                .put("decodedBuffers",trace.buffers).put("decodedPcmFrames",if(type=="audio/") pcmFrames else JSONObject.NULL)
+                .put("decodedPcmEndExclusiveUs",pcmEnd ?: JSONObject.NULL)
+                .put("reportedTrackDurationUs",if(format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else JSONObject.NULL))
         } finally { codec?.release();extractor.release() }
     }
     val duration=inspect(file).duration
+    val timing=JSONObject().put("expectedMs",expectedMs).put("containerMs",duration).put("tracks",measured)
+        .put("lastPtsGapUs",kotlin.math.abs(spans[0].second-spans[1].second))
+    diagnostic(timing)
     require(kotlin.math.abs(duration-expectedMs)<=100) { "Output duration differs: expected $expectedMs ms, got $duration ms." }
     require(kotlin.math.abs(spans[0].second-spans[1].second)<=100_000 && kotlin.math.abs(spans[0].first-spans[1].first)<=100_000) { "Output audio/video timing differs by over 100 ms." }
-    return JSONObject().put("sha256",sha(file)).put("durationMs",duration)
+    return JSONObject().put("sha256",sha(file)).put("durationMs",duration).put("timing",timing)
 }
