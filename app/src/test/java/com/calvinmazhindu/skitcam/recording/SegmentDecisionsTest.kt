@@ -60,7 +60,7 @@ class SegmentDecisionsTest {
         repeat(segments.length()) { segments.getJSONObject(it).remove("kept") }
         val decoded = SessionCodec.decode(legacy.toString())
         assertTrue(decoded.segments.all { it.kept })
-        assertEquals(4, JSONObject(SessionCodec.encode(decoded)).getInt("version"))
+        assertEquals(5, JSONObject(SessionCodec.encode(decoded)).getInt("version"))
     }
     @Test fun v2MissingStatusDoesNotSilentlyRestoreDiscardedSegment() {
         val json = JSONObject(SessionCodec.encode(fixture()))

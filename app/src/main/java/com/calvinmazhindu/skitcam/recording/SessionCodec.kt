@@ -9,7 +9,7 @@ import java.util.UUID
 object SessionCodec {
     fun encode(session: Session): String {
         check(session.validPlaybackOrder()) { "Invalid segment identity or playback order." }
-        return JSONObject().put("version", 4).put("id", session.id)
+        return JSONObject().put("version", 5).put("lens", session.lens.name).put("id", session.id)
         .put("createdAtMs", session.createdAtMs).put("orientationDegrees", session.orientationDegrees)
         .put("state", session.state.name).put("error", session.error ?: JSONObject.NULL)
         .put("segments", JSONArray().apply {
@@ -29,7 +29,7 @@ object SessionCodec {
     fun decode(text: String): Session {
         val json = JSONObject(text)
         val version = json.getInt("version")
-        check(version in 1..4) { "Unknown session metadata version." }
+        check(version in 1..5) { "Unknown session metadata version." }
         val sessionId = json.getString("id")
         val segments = json.getJSONArray("segments")
         val history =
@@ -60,7 +60,7 @@ object SessionCodec {
             json.getInt("orientationDegrees"), RecordingState.valueOf(json.getString("state")), history,
             if (json.isNull("pending")) null else json.getJSONObject("pending").let {
                 PendingSegment(it.getString("id"), it.getString("path"), it.getInt("order"))
-            }, if (json.isNull("error")) null else json.getString("error"), playback)
+            }, if (json.isNull("error")) null else json.getString("error"), playback, if (version >= 5) CameraLens.valueOf(json.getString("lens")) else CameraLens.Rear)
         check(session.validPlaybackOrder()) { "Invalid segment identity or playback order." }
         return session
     }

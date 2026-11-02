@@ -1,6 +1,9 @@
 # SkitCam
 
-A native Android segment camera built with Kotlin, Jetpack Compose and CameraX.
+A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Milestone 8 adds Photo / Skit Video modes, JPEG capture, camera switching, focus,
+zoom and a camera-first interface. See [VALIDATION_M8.md](VALIDATION_M8.md) for
+measured capabilities, validation results and remaining checks.
 Milestone 7 adds truthful microphone discovery, recording audio-level feedback
 and safe pauses on external-input loss. Milestone 6 provides automatic MP4 finishing after STOP. The export pipeline respects
 Keep/Discard, saved playback order and non-destructive trim boundaries. Original
@@ -16,6 +19,50 @@ The main workflow has passed on the Moto G54, including Play, the standard Share
 chooser and New Recording. Reordered non-keyframe trims also passed independent
 scene/audio measurements. See [VALIDATION_M6.md](VALIDATION_M6.md) for actual test
 results, preservation evidence and remaining platform/stress checks.
+
+## Photo and camera controls
+
+The first launch opens **Skit Video**. The app remembers the last successfully
+bound mode and each mode's lens. Startup waits for preferences and recording/export
+recovery; an unfinished session takes priority over a Photo preference. Mode and
+lens switching are disabled throughout an unfinished session, including PAUSE,
+and while finishing or saving a photo. Switching never silently stops a session.
+
+Choose **Photo** and press the white shutter. Photos use CameraX JPEG quality
+priority and the highest suitable supported resolution, with a standard-resolution
+binding fallback. Output goes to **Pictures/SkitCam** after validation. Resolution
+is reported from actual camera/output facts; more pixels do not guarantee better
+image quality. Only camera permission is needed for Photo on modern Android.
+Android 8/9 also require the existing legacy storage permission to publish.
+
+The **camera-switch icon** switches front/rear before recording or while Photo is idle. The selfie
+preview is mirrored; saved photos and videos request unmirrored output. A video
+session locks its lens and orientation for all segments and recovery.
+
+Tap the unobstructed preview to focus. Pinch to zoom, or open **Quick** for a
+precise zoom slider, a grid, supported exposure compensation and a Photo timer
+(Off / 3 / 10 seconds). Unsupported adjustments are hidden. Focus, zoom and
+exposure reset when changing cameras; grid and timer preferences persist.
+The timer cancels when the app leaves the foreground. **Settings** opens the full
+settings screen only while idle. Quick settings can close without stopping video.
+
+The gallery thumbnail opens the latest accessible successfully published photo or
+video. Missing media and absent viewers show feedback. Photo publication uses
+private staging, an atomic recovery journal, verified MediaStore copies and pending
+rows on Android 10+. Failed publication retains the private capture for **Retry
+Save**; interrupted captures are not mistaken for completed photos. Only a new
+job's verified temporary JPEG is removed after its identical gallery copy succeeds.
+Original video segments and session metadata are never cleaned up automatically.
+
+Preview binds with ImageCapture in Photo and the existing Recorder in Skit Video.
+The app does not require all three use cases simultaneously. Camera adjustments
+never rebind the recording camera. The video indicator shows bound resolution and
+**Auto FPS**, rather than claiming a measured capture frame rate.
+
+New session metadata is version **5**, adding `lens: "Rear" | "Front"`. Versions
+1–4 load as Rear without a startup rewrite. Existing v4 integer trim boundaries,
+segment IDs, chronology, Keep status and playback order are unchanged. A normal
+subsequent user edit saves through the same atomic repository in the latest format.
 
 ## Recording
 
@@ -114,8 +161,8 @@ backgrounding, closing Arrange or starting another recording.
 The PAUSE strip stays in recording chronology. Arrangement only changes a
 separate playback-order list. Discard removes a segment from that list; restoring
 it appends it to the end. New recordings also append. Existing arranged items
-keep their relative order, original filenames and recording numbers. STOP keeps
-the chosen order for future assembly, which is not implemented yet.
+keep their relative order, original filenames and recording numbers. STOP preserves
+the chosen order and applies it during verified MP4 assembly.
 
 ## Trim
 
@@ -206,7 +253,8 @@ explicitly if more than one is attached:
 Allow camera access at first launch. Denial shows a retry or app-settings action;
 returning from settings checks permission again. Preview follows the activity
 lifecycle, releases its use case on disposal, and reports camera startup errors.
-Only the rear camera is used; the preview fills the screen by center cropping.
+Both rear and front cameras are supported. Video preview fills by center cropping;
+Photo uses a fitted capture viewport. Saved media keeps its independent orientation.
 
 ## Files and recovery
 
@@ -224,7 +272,7 @@ files/sessions/<session-id>/
 
 Metadata records session state, timestamps, ordered segments, recording duration,
 physical orientation, encoded video rotation, absolute file paths, errors and
-the pending attempt. Version 4 retains immutable segment IDs and a separate
+the pending attempt and the session lens. Version 5 retains immutable segment IDs and a separate
 `playbackOrder` list of kept IDs. Versions 1/2 load deterministic IDs derived from
 session ID and recording number, with chronological playback order; version 1
 defaults every successful segment to Keep. Legacy metadata upgrades only on a

@@ -14,7 +14,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_skitcam"
-        android:label="@string/app_name"
+        android:label="${appLabel}"
         android:supportsRtl="true"
         android:theme="@style/Theme.SkitCam">
         <service android:name=".export.ExportService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />

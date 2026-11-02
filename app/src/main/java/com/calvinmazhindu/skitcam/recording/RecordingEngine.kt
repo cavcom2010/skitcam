@@ -4,6 +4,8 @@ import com.calvinmazhindu.skitcam.trim.*
 import java.io.File
 import java.util.UUID
 
+enum class CameraLens { Rear, Front }
+
 enum class RecordingState { Ready, Starting, Recording, Finalising, Paused, Stopping, Completed, Error }
 
 data class Segment(val order: Int, val path: String, val durationMs: Long,
@@ -17,7 +19,8 @@ data class PendingSegment(val id: String, val path: String, val order: Int)
 data class Session(val id: String, val createdAtMs: Long, val orientationDegrees: Int,
     val state: RecordingState, val segments: List<Segment> = emptyList(),
     val pending: PendingSegment? = null, val error: String? = null,
-    val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id }) {
+    val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id },
+    val lens: CameraLens = CameraLens.Rear) {
     val durationMs: Long get() = safeDurationSum(segments.filter { it.kept }.map { it.displayDurationMs })
     val durationEstimated get() = segments.any { it.kept && it.trim == null }
     val retainedCount: Int get() = segments.count { it.kept }
@@ -118,14 +121,14 @@ class RecordingEngine(
             fail("Session metadata could not be read. Files are retained. STOP acknowledges this error.")
         }
     }
-    fun start(orientation: Int?) {
+    fun start(orientation: Int?, lens: CameraLens = CameraLens.Rear) {
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed) || activeId != null) return
         if (!checkOrientation(orientation, null)) return
         val unavailable = availability()
         if (unavailable != null) { publish(message = unavailable); return }
         val id = UUID.randomUUID().toString()
         terminalReason = null
-        publish(RecordingState.Starting, Session(id, now(), orientation!!, RecordingState.Starting), 0, null)
+        publish(RecordingState.Starting, Session(id, now(), orientation!!, RecordingState.Starting, lens = lens), 0, null)
         beginSegment()
     }
     fun resume(orientation: Int?) {

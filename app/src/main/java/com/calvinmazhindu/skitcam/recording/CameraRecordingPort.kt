@@ -13,9 +13,9 @@ import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraRecordingPort(private val context: Context, private val events: Executor, private val audio: com.calvinmazhindu.skitcam.audio.AudioMonitor) : RecordingPort {
-    val capture: VideoCapture<Recorder> = VideoCapture.withOutput(Recorder.Builder()
+    val capture: VideoCapture<Recorder> = VideoCapture.Builder(Recorder.Builder()
         .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)))
-        .build())
+        .build()).setMirrorMode(androidx.camera.core.MirrorMode.MIRROR_MODE_OFF).build()
     var beforeStart: ((Int) -> Unit)? = null // Main-thread activity orientation lock.
     private val main = ContextCompat.getMainExecutor(context)
     private var activeStop: (() -> Unit)? = null

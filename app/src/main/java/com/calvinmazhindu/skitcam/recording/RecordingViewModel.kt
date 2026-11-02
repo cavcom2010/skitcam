@@ -28,6 +28,11 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     val audio get() = runtime.audio
     val port get() = runtime.port
     val cameraAvailability get() = runtime.cameraAvailability
+    val recovered get() = runtime.recovered
+    val commandPending get() = runtime.commandPending
+    var boundLens: CameraLens
+        get() = runtime.boundLens
+        set(value) { runtime.boundLens = value }
     var cameraReady: Boolean
         get() = runtime.cameraReady
         set(value) { runtime.cameraReady = value }
@@ -50,6 +55,9 @@ private class RecordingRuntime(private val application: Application) {
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val state = MutableStateFlow(RecordingSnapshot())
+    val recovered = MutableStateFlow(false)
+    val commandPending = MutableStateFlow(false)
+    @Volatile var boundLens = CameraLens.Rear
     val snapshots = state.asStateFlow()
     val audio = com.calvinmazhindu.skitcam.audio.AudioMonitor(application, ::audioChanged)
     val port = CameraRecordingPort(application, worker, audio)
@@ -59,7 +67,7 @@ private class RecordingRuntime(private val application: Application) {
     var cameraReady: Boolean
         get() = camera.value
         set(value) { camera.value = value }
-    private val engine = RecordingEngine(port, SessionFileStore(File(application.filesDir, "sessions")),
+    private val engine: RecordingEngine = RecordingEngine(port, SessionFileStore(File(application.filesDir, "sessions")),
         Watchdog { callback ->
             val runnable = Runnable { worker.execute(callback) }
             main.postDelayed(runnable, 30_000)
@@ -67,7 +75,9 @@ private class RecordingRuntime(private val application: Application) {
         }, availability = {
             when {
                 ExportJournal.busy -> "Wait for video finishing to complete."
-                !cameraReady -> "Wait for the rear-camera preview."
+                !recovered.value -> "Wait for session recovery."
+                !cameraReady -> "Wait for the camera preview."
+                engineLensMismatch() -> "The original session camera is not ready."
                 !hasPermission(Manifest.permission.CAMERA) -> "Camera permission is required."
                 !hasPermission(Manifest.permission.RECORD_AUDIO) -> "Microphone permission is required."
                 else -> null
@@ -81,10 +91,16 @@ private class RecordingRuntime(private val application: Application) {
     init { worker.execute {
         engine.restore()
         engine.snapshot.session?.let { try { ExportJournal.restore(application,it) } catch(_: Exception) {} }
+        recovered.value = true
     } }
     private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(
         application, permission) == PackageManager.PERMISSION_GRANTED
-    fun start(orientation: Int?) = worker.execute { engine.start(orientation) }
+    private fun engineLensMismatch() = engine.snapshot.openSession && engine.snapshot.session?.lens != boundLens
+    fun start(orientation: Int?) {
+        if(!cameraReady || commandPending.value) return
+        commandPending.value = true
+        worker.execute { try { engine.start(orientation, boundLens) } finally { commandPending.value = false } }
+    }
     fun resume(orientation: Int?) = worker.execute { engine.resume(orientation) }
     fun pause() = worker.execute { engine.pause() }
     fun stop() = worker.execute {

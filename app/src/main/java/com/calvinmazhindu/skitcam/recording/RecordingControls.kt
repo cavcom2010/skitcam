@@ -109,16 +109,19 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(snapshot.state.name, color = Color.White, style = MaterialTheme.typography.titleSmall)
-        val seconds = snapshot.durationMs / 1000
-        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, snapshot.count) + if (snapshot.session?.durationEstimated == true) " · estimated" else "",
+        Text(if(snapshot.state == RecordingState.Completed) "Ready" else snapshot.state.name, color = Color.White, style = MaterialTheme.typography.labelSmall)
+        val fresh = snapshot.state == RecordingState.Completed
+        val seconds = if(fresh) 0L else snapshot.durationMs / 1000
+        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, if(fresh) 0 else snapshot.count) + if (!fresh && snapshot.session?.durationEstimated == true) " · estimated" else "",
             color = Color.White, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
         when (snapshot.state) {
             RecordingState.Ready, RecordingState.Completed -> Button(
-                onClick = { releaseReview(); if (microphone) model.start(pose) else requestAudio() }, enabled = canStart) { Text("START") }
-            RecordingState.Recording -> Button(onClick = { model.pause() }) { Text("PAUSE") }
+                onClick = { releaseReview(); if (microphone) model.start(pose) else requestAudio() }, enabled = canStart,
+                shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(80.dp),contentPadding=PaddingValues(0.dp),
+                colors = ButtonDefaults.buttonColors(containerColor=Color(0xFF9F3442),contentColor=Color.White)) { Text("START") }
+            RecordingState.Recording -> Button(onClick = { model.pause() },shape = androidx.compose.foundation.shape.CircleShape,modifier=Modifier.size(80.dp),contentPadding=PaddingValues(0.dp)) { Text("PAUSE") }
             RecordingState.Paused -> Button(
-                onClick = { releaseReview(); if (microphone) model.resume(pose) else requestAudio() }, enabled = canResume) { Text("RESUME") }
+                onClick = { releaseReview(); if (microphone) model.resume(pose) else requestAudio() }, enabled = canResume,modifier=Modifier.heightIn(min=56.dp)) { Text("RESUME") }
             else -> Unit
         }
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed)) {
@@ -133,14 +136,13 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         }
         val warning = when {
             snapshot.state == RecordingState.Error -> snapshot.message
-            snapshot.state == RecordingState.Completed -> snapshot.message
-            snapshot.state in setOf(RecordingState.Ready, RecordingState.Paused) && !poseCorrect ->
+            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
                 if (desiredPose == null) "Hold the phone upright and steady to enable START."
                 else "Wrong orientation. Return to the original $desiredPose° direction to RESUME."
-            snapshot.state == RecordingState.Ready && !matchesPreview -> "Rotate the phone to match the preview orientation before START."
+            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> "Rotate the phone to match the preview orientation before START."
             !microphone -> if (requested) "Microphone access is off. Tap START or RESUME to allow it in permissions or settings."
                 else "Audio is required. START requests microphone permission; press START again after allowing it."
-            else -> snapshot.message
+            else -> if(snapshot.state == RecordingState.Completed) null else snapshot.message
         }
         if (warning != null) Text(warning, color = Color(0xFFF2D4BC),
             style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)

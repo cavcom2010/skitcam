@@ -7,6 +7,14 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.os.Build
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.calvinmazhindu.skitcam.camera.*
+import com.calvinmazhindu.skitcam.photo.PhotoModel
+import com.calvinmazhindu.skitcam.recording.CameraLens
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,6 +22,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -50,6 +60,8 @@ import com.calvinmazhindu.skitcam.trim.TrimScreen
 import com.calvinmazhindu.skitcam.export.*
 
 class MainActivity : ComponentActivity() {
+    val cameraModel: CameraModel by lazy { ViewModelProvider(this)[CameraModel::class.java] }
+    val photoModel: PhotoModel by lazy { ViewModelProvider(this)[PhotoModel::class.java] }
     val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
     val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
@@ -62,7 +74,7 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFB96969))) {
-                CameraScreen()
+                Surface(color=Color(0xFF101014),contentColor=Color.White) { CameraScreen() }
             }
         }
     }
@@ -71,6 +83,9 @@ class MainActivity : ComponentActivity() {
         recordingModel.audio.foreground(true)
     }
     override fun onPause() {
+        photoModel.cancelTimer()
+        cameraModel.idle()
+        recordingModel.cameraReady = false
         recordingModel.audio.foreground(false)
         arrangementModel.cancelDrag()
         reviewController.close()
@@ -91,8 +106,63 @@ private fun MainActivity.CameraScreen() {
     val review = reviewController
     val arrangement = arrangementModel
     val export by ExportJournal.status.collectAsStateWithLifecycle()
-    var dismissedExport by rememberSaveable { mutableStateOf<String?>(null) }
-    val finishing = export?.sessionId == snapshot.session?.id && export != null && dismissedExport != export?.sessionId
+    val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
+    val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
+    val camera = cameraModel
+    val photos = photoModel
+    val finishing = camera.loaded && export?.sessionId == snapshot.session?.id && export != null && camera.acknowledgedExport != export?.sessionId
+    LaunchedEffect(camera.loaded, recovered) {
+        if(camera.loaded && recovered) {
+            // UI collectors can resume in different orders. Read the completed recovery directly.
+            val current = recordingModel.snapshots.value
+            val result = ExportJournal.status.value
+            camera.initialize(current,result!=null && result.sessionId==current.session?.id && camera.acknowledgedExport!=result.sessionId)
+        }
+    }
+    LaunchedEffect(camera.loaded,photos.lastUri) { if(camera.loaded) photos.lastUri?.let { camera.media(it,"image/jpeg",photos.savedAt) } }
+    LaunchedEffect(camera.loaded,export?.uri, export?.state) {
+        val result = export
+        if(camera.loaded && result?.state == ExportState.Completed && result.uri != null) {
+            val time = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { ExportJournal.read(this@CameraScreen,result.sessionId)?.getLong("createdAt") }.getOrNull()
+            }
+            if(time != null) camera.media(Uri.parse(result.uri),"video/mp4",time)
+        }
+    }
+    val photo = camera.choice.mode == CameraMode.Photo
+    fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
+        finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value) && camera.streaming
+    val maySwitch = switchAllowed() && !commandPending
+    fun selectCamera(mode: CameraMode = camera.choice.mode, lens: CameraLens? = null) {
+        val old = camera.choice
+        camera.select(mode,lens,switchAllowed())
+        if(camera.choice != old) recordingModel.cameraReady = false
+    }
+    var quick by rememberSaveable { mutableStateOf(false) }
+    var settings by rememberSaveable { mutableStateOf(false) }
+    val blocked = snapshot.state in setOf(RecordingState.Starting,RecordingState.Finalising,RecordingState.Stopping)
+    val editors = arrangement.draft != null || trimModel.segment != null || review.selection != null || finishing
+    val adjustments = !blocked && !editors && !photos.busy && camera.streaming
+    LaunchedEffect(editors, blocked) { if(editors || blocked) { quick = false; settings = false } }
+    val legacyStorage = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    fun takePhoto() {
+        if(!grantedPhotoPermission(this) || !CameraPolicy.maySwitch(recordingModel.recovered.value,
+                recordingModel.snapshots.value,ExportJournal.busy || finishing,photos.busy || recordingModel.commandPending.value)) return
+        if(Build.VERSION.SDK_INT <= 28 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            legacyStorage.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE))
+            return
+        }
+        @Suppress("DEPRECATION") val rotation = windowManager.defaultDisplay.rotation
+        photos.take(camera.timer,rotation)
+    }
+    fun openMedia() {
+        val uri = camera.latestUri ?: return
+        try {
+            contentResolver.openInputStream(Uri.parse(uri))!!.use { check(it.read() >= 0) }
+            if(camera.latestType == "video/mp4") startActivity(Intent(this,FinishedPlaybackActivity::class.java).setData(Uri.parse(uri)))
+            else startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),camera.latestType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        } catch(_: Exception) { camera.message = "Saved media is unavailable, or no compatible viewer is installed." }
+    }
     val trimming = trimModel.segment != null
     val arranging = arrangement.draft != null || trimming || finishing
     val thumbnails = remember { ThumbnailLoader() }
@@ -145,8 +215,10 @@ private fun MainActivity.CameraScreen() {
     }
 
     Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
-        if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
-            CameraPreview(recordingModel, Modifier.fillMaxSize())
+        if(!recovered || !camera.ready || !photos.recovered) {
+            CameraMessage("Restoring camera…")
+        } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
+            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().then(if(photo && landscape) Modifier.padding(end=280.dp) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -164,39 +236,30 @@ private fun MainActivity.CameraScreen() {
                 }
             )
         }
-        Box(Modifier.fillMaxWidth().height(140.dp).background(
-            Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))
-        ))
-        Column(Modifier.fillMaxWidth().onSizeChanged { headerHeight = it.height }) {
-        Row(
-            Modifier.fillMaxWidth()
-                .then(if (arranging) Modifier.clearAndSetSemantics {} else Modifier)
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top))
-                .padding(start = 24.dp, top = 24.dp, bottom = 24.dp,
-                    end = if (landscape) 264.dp else 24.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(stringResource(R.string.app_name), color = Color.White, style = MaterialTheme.typography.titleLarge)
-            Text(stringResource(R.string.rear_camera), color = Color.White.copy(alpha = 0.75f),
-                style = MaterialTheme.typography.labelSmall)
+        if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
+            .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
+            Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) 288.dp else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
+                horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
+                TextButton(onClick={settings=true;quick=false},enabled=maySwitch) { Text("Settings") }
+                Text("${if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else "Front camera"} · ${camera.resolution}",style=MaterialTheme.typography.labelSmall,modifier=Modifier.weight(1f))
+                TextButton(onClick={quick=!quick},enabled=adjustments) { Text("Quick") }
+            }
+            if(!photo && !arranging && review.selection==null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio,
+                Modifier.padding(start=8.dp,end=if(landscape) 280.dp else 8.dp))
         }
-        if (!arranging && review.selection == null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio,
-            Modifier.padding(start = 24.dp, end = if (landscape) 264.dp else 24.dp))
-        }
-        if (!arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
+        if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
             PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
                 onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = Modifier.fillMaxSize()
                     .padding(top = top, bottom = if (landscape) 0.dp else bottom,
-                        end = if (landscape) 240.dp else 0.dp)
+                        end = if (landscape) 280.dp else 0.dp)
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(
                         if (landscape) WindowInsetsSides.Start + WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal))
                     .padding(8.dp))
         }
         Column(
-            (if (landscape) Modifier.align(Alignment.CenterEnd).width(240.dp).fillMaxHeight()
+            (if (landscape) Modifier.align(Alignment.CenterEnd).width(280.dp).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
                 .then(if (arranging) Modifier.clearAndSetSemantics {} else Modifier)
@@ -205,11 +268,47 @@ private fun MainActivity.CameraScreen() {
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
                     if (landscape) WindowInsetsSides.End + WindowInsetsSides.Vertical
                     else WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
-                )).padding(horizontal = if (landscape) 16.dp else 24.dp, vertical = 24.dp),
+                )).padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
-            RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted,
+            if(camera.ready && recovered && !finishing) {
+                if(!snapshot.openSession) {
+                    @Composable fun ModeChip(mode: CameraMode, label: String, modifier: Modifier = Modifier) {
+                        FilterChip(selected=camera.choice.mode==mode,onClick={photos.cancelTimer();selectCamera(mode=mode)},
+                            enabled=maySwitch && !camera.switching,label={Text(label)},modifier=modifier)
+                    }
+                    if(landscape) Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
+                        ModeChip(CameraMode.Photo,"Photo",Modifier.fillMaxWidth())
+                        ModeChip(CameraMode.SkitVideo,"Skit Video",Modifier.fillMaxWidth())
+                    } else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        ModeChip(CameraMode.Photo,"Photo")
+                        ModeChip(CameraMode.SkitVideo,"Skit Video")
+                    }
+                }
+                if(photo) Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
+                        MediaShortcut(camera.latestUri,camera.latestType,camera.latestUri!=null && !photos.busy,::openMedia)
+                        Button(onClick=::takePhoto,enabled=granted && maySwitch && !camera.switching,shape=CircleShape,
+                            colors=ButtonDefaults.buttonColors(containerColor=Color.Transparent,contentColor=Color.White),contentPadding=PaddingValues(0.dp),modifier=Modifier.size(80.dp)
+                                .semantics { contentDescription="Take photo" }) { androidx.compose.foundation.Canvas(Modifier.size(76.dp)) { drawCircle(Color.White,radius=size.minDimension/2-2.dp.toPx(),style=androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()));drawCircle(Color.White,radius=size.minDimension/2-8.dp.toPx()) } }
+                        LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) {
+                            selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear)
+                        }
+                    }
+                    if(photos.countdown>0) Text("${photos.countdown} · Cancel",modifier=Modifier.semantics { contentDescription="Photo countdown ${photos.countdown}" })
+                    if(photos.countdown>0) TextButton(onClick=photos::cancelTimer) { Text("Cancel timer") }
+                    photos.message?.let { Text(it,style=MaterialTheme.typography.labelMedium) }
+                    if(photos.canRetry) TextButton(onClick=photos::retry) { Text("Retry Save") }
+                } else {
+                    if(!snapshot.openSession) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
+                        MediaShortcut(camera.latestUri,camera.latestType,maySwitch && camera.latestUri!=null,::openMedia)
+                        LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) {
+                            selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear)
+                        }
+                    }
+                    RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted && !camera.switching,
                 beforeRecording = { trimModel.close(); review.close(); arrangement.invalidate() },
                 onBackground = { review.close() },
                 onArrange = {
@@ -219,12 +318,20 @@ private fun MainActivity.CameraScreen() {
                         arrangement.open(current.session!!)
                     }
                 })
+                }
+                if(camera.focus!=null) Text(camera.focusResult,style=MaterialTheme.typography.labelSmall)
+                camera.message?.let { Text(it,style=MaterialTheme.typography.labelSmall) }
+            }
         }
+        if(quick && !editors) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp)) {
+            CameraTools(camera,false,adjustments) { quick=false }
+        }
+        if(settings && maySwitch) CameraTools(camera,true,adjustments) { settings=false }
         if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
-        if (finishing) ExportScreen(export!!) { dismissedExport = export!!.sessionId }
+        if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
     }
 }
 
@@ -233,7 +340,7 @@ internal fun CameraMessage(message: String, action: String? = null, onAction: ()
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
     Box(Modifier.fillMaxSize().safeDrawingPadding().padding(
-        start = 32.dp, end = if (landscape) 240.dp else 32.dp,
+        start = 32.dp, end = if (landscape) 280.dp else 32.dp,
         top = if (landscape) 88.dp else 150.dp, bottom = if (landscape) 32.dp else 150.dp),
         contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally,
@@ -243,3 +350,5 @@ internal fun CameraMessage(message: String, action: String? = null, onAction: ()
         }
     }
 }
+
+private fun grantedPhotoPermission(context: Context) = ContextCompat.checkSelfPermission(context,Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
