@@ -2,6 +2,9 @@ package com.calvinmazhindu.skitcam
 
 import android.util.Rational
 import androidx.camera.core.*
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import com.calvinmazhindu.skitcam.video.*
 import androidx.camera.core.resolutionselector.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -31,6 +34,8 @@ import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.photo.PhotoModel
 import com.calvinmazhindu.skitcam.recording.*
 
+@OptIn(ExperimentalSessionConfig::class)
+@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 @Composable
 internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, photos: PhotoModel,
     gesturesEnabled: Boolean, modifier: Modifier = Modifier) {
@@ -41,16 +46,19 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
     val window = LocalWindowInfo.current.containerSize
     val landscape = window.width > window.height
     // A new view per idle binding choice prevents accepting the previous stream's cached STREAMING event.
-    val view = remember(context, choice) { PreviewView(context).apply {
+    val videoRevision = if(photo) 0 else cameraModel.video.revision
+    val view = remember(context, choice, videoRevision) { PreviewView(context).apply {
         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
     } }
     var attempt by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
-    DisposableEffect(lifecycleOwner, view, choice, attempt) {
+    DisposableEffect(lifecycleOwner, view, choice, attempt, videoRevision) {
         var disposed = false
         var provider: ProcessCameraProvider? = null
         var preview: Preview? = null
         var image: ImageCapture? = null
+        var videoCapture: androidx.camera.video.VideoCapture<androidx.camera.video.Recorder>? = null
+        var profileAvailable = false
         var info: androidx.lifecycle.LiveData<CameraState>? = null
         var bound = false
         error = null
@@ -62,7 +70,8 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
             if(active) {
                 cameraModel.streamed()
                 model.boundLens = choice.lens
-                model.cameraReady = !photo
+                cameraModel.video.streamed()
+                model.cameraReady = !photo && profileAvailable && cameraModel.video.ready
             } else {
                 model.cameraReady = false
                 cameraModel.idle()
@@ -91,9 +100,30 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                 cameraModel.hasOtherLens = cameraProvider.hasCamera(if(choice.lens == CameraLens.Rear) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
                 view.scaleType = if(photo) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
                 fun bind(highResolution: Boolean): Camera {
-                    val useCase = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
+                    val builder=Preview.Builder()
+                    if(!photo) Camera2Interop.Extender(builder).setSessionCaptureCallback(cameraModel.video.callback())
+                    val useCase = builder.build().also { it.surfaceProvider = view.surfaceProvider }
                     preview = useCase
-                    if(!photo) return cameraProvider.bindToLifecycle(lifecycleOwner,selector,useCase,model.port.capture)
+                    if(!photo) {
+                        val info=cameraProvider.getCameraInfo(selector)
+                        val snapshot=model.snapshots.value
+                        val open=snapshot.session?.takeIf { snapshot.openSession }
+                        val requested=cameraModel.video.desired(info,open,model.legacyMedia.value)
+                        var capture=model.port.prepare(requested)
+                        if(!cameraModel.video.configuration(info,useCase,capture)) capture=model.port.prepare(cameraModel.video.settings)
+                        videoCapture=capture
+                        val bound=cameraProvider.bindToLifecycle(lifecycleOwner,selector,useCase,capture)
+                        val size=checkNotNull(capture.resolutionInfo).resolution
+                        val profile=cameraModel.video.profile(size.width,size.height)
+                        require(open?.captureProfile?.sameConfiguration(profile)!=false) { "Original capture dimensions are unavailable. RESUME is blocked." }
+                        if(open!=null && open.captureProfile==null) require(model.legacyMedia.value?.let { media ->
+                            maxOf(media.width,media.height)==maxOf(size.width,size.height) && minOf(media.width,media.height)==minOf(size.width,size.height)
+                        }==true) { "Legacy capture dimensions cannot be restored. RESUME is blocked." }
+                        model.port.bound(profile)
+                        profileAvailable=true
+                        cameraModel.video.bound(bound)
+                        return bound
+                    }
                     val resolution = ResolutionSelector.Builder()
                         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                         .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
@@ -113,15 +143,29 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                     bind(false)
                 }
                 photos.capture = image
-                val resolution = if(photo) image?.resolutionInfo else model.port.capture.resolutionInfo
-                cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · Auto FPS")
+                val resolution = if(photo) image?.resolutionInfo else videoCapture?.resolutionInfo
+                cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · ${cameraModel.video.settings.fps?.let { "$it fps target" } ?: "Auto FPS"}")
                 info = camera.cameraInfo.cameraState.also { it.observe(lifecycleOwner,stateObserver) }
                 bound = true
                 view.previewStreamState.observe(lifecycleOwner,streamObserver)
             } catch(e: Exception) {
                 error = e.message ?: "Cannot start camera."
-                cameraModel.failed(error!!)
-                if(!photo) model.cameraError()
+                if(!photo) {
+                    cameraModel.video.failed(error!!)
+                    // Configuration failure during recovery must not rewrite a paused journal.
+                    runCatching {
+                        videoCapture?.let { cameraProvider -> provider?.unbind(cameraProvider) }
+                        preview?.let { provider?.unbind(it) }
+                        val fallback=Preview.Builder().build().also { it.surfaceProvider=view.surfaceProvider }
+                        preview=fallback
+                        val selector=if(choice.lens==CameraLens.Rear) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                        val camera=provider!!.bindToLifecycle(lifecycleOwner,selector,fallback)
+                        cameraModel.bound(camera,"Preview only · RESUME blocked")
+                        info=camera.cameraInfo.cameraState.also { it.observe(lifecycleOwner,stateObserver) }
+                        bound=true;error=null
+                        view.previewStreamState.observe(lifecycleOwner,streamObserver)
+                    }
+                } else cameraModel.failed(error!!)
             }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
@@ -133,10 +177,14 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
             info?.removeObserver(stateObserver)
             preview?.let { provider?.unbind(it) }
             image?.let { provider?.unbind(it) }
-            if(!photo) provider?.unbind(model.port.capture)
+            videoCapture?.let { provider?.unbind(it) }
             if(photos.capture === image) photos.capture = null
             cameraModel.released()
         }
+    }
+    LaunchedEffect(cameraModel.video.pending,cameraModel.video.whiteBalanceStatus,cameraModel.streaming) {
+        if(!photo && cameraModel.streaming) model.cameraReady=cameraModel.video.ready && model.port.profile!=null &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }
     BoxWithConstraints(modifier) {
         val ratio = if(landscape) 4f/3f else 3f/4f

@@ -21,7 +21,7 @@ object ExportJournal {
         val atomic = AtomicFile(File(directory(context,id),"job.json"))
         if (!atomic.baseFile.exists() && !File(atomic.baseFile.path+".bak").exists()) return null
         return atomic.openRead().bufferedReader().use { JSONObject(it.readText()) }.also {
-            require(it.getInt("version")==1 && it.getString("sessionId")==id) { "Invalid export journal." }
+            require(it.getInt("version") in 1..2 && it.getString("sessionId")==id) { "Invalid export journal." }
             UUID.fromString(it.getString("id"))
         }
     }
@@ -35,14 +35,14 @@ object ExportJournal {
     @Synchronized fun request(context: Context, session: Session) {
         if (read(context,session.id)!=null) return
         cancelRequested=false
-        val job = JSONObject().put("version",1).put("id",UUID.randomUUID().toString()).put("sessionId",session.id)
+        val job = JSONObject().put("version",if(session.captureProfile==null) 1 else 2).put("id",UUID.randomUUID().toString()).put("sessionId",session.id)
             .put("state",ExportState.Preparing.name).put("ready",false).put("createdAt",System.currentTimeMillis())
         write(context,session.id,job)
     }
     @Synchronized fun finalised(context: Context, session: Session) {
         val job=read(context,session.id) ?: return
         if (job.optBoolean("ready")) return
-        job.put("session",SessionCodec.encode(session)).put("ready",true)
+        job.put("session",SessionCodec.encode(session)).put("exportProfile",session.captureProfile?.let(com.calvinmazhindu.skitcam.video.VideoJson::profile) ?: JSONObject.NULL).put("ready",true)
         write(context,session.id,job)
     }
     @Synchronized fun update(context: Context, id: String, state: ExportState, message: String? = null, uri: String? = null) {

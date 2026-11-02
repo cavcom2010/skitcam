@@ -61,4 +61,17 @@ class ExportJournalDeviceTest {
         try { ExportJournal.update(context,session.id,ExportState.Exporting);fail() } catch(_: IllegalStateException) { }
         assertEquals(before,ExportJournal.read(context,session.id).toString())
     }
+    @Test fun profiledJobsFreezeVersionTwoAndLegacyJobsRemainVersionOne() {
+        val profile=com.calvinmazhindu.skitcam.video.CaptureProfile("0",com.calvinmazhindu.skitcam.video.VideoSettings(fps=30),1920,1080)
+        for(p in listOf(null,profile)) {
+            val session=session().copy(captureProfile=p)
+            ExportJournal.request(context,session);ExportJournal.finalised(context,session)
+            val before=ExportJournal.read(context,session.id)!!
+            assertEquals(if(p==null) 1 else 2,before.getInt("version"))
+            ExportJournal.finalised(context,session.copy(captureProfile=profile.copy(width=1280,height=720)))
+            assertEquals(before.toString(),ExportJournal.read(context,session.id).toString())
+            assertEquals(p,SessionCodec.decode(before.getString("session")).captureProfile)
+        }
+    }
+
 }

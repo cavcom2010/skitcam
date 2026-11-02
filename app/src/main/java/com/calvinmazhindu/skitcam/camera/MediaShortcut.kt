@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.camera
 
+import androidx.core.net.toUri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -28,8 +29,8 @@ fun MediaShortcut(uri: String?, type: String, enabled: Boolean, onOpen: () -> Un
     val bitmap by produceState<Bitmap?>(null,uri) {
         value = withContext(Dispatchers.IO) { runCatching {
             if(uri==null) null
-            else if(Build.VERSION.SDK_INT>=29) context.contentResolver.loadThumbnail(Uri.parse(uri),android.util.Size(96,96),null)
-            else if(type.startsWith("image/")) context.contentResolver.openFileDescriptor(Uri.parse(uri),"r")?.use { descriptor ->
+            else if(Build.VERSION.SDK_INT>=29) context.contentResolver.loadThumbnail(uri.toUri(),android.util.Size(96,96),null)
+            else if(type.startsWith("image/")) context.contentResolver.openFileDescriptor(uri.toUri(),"r")?.use { descriptor ->
                 val bounds=BitmapFactory.Options().apply { inJustDecodeBounds=true }
                 BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor,null,bounds)
                 var sample=1

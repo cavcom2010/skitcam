@@ -30,6 +30,7 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     val cameraAvailability get() = runtime.cameraAvailability
     val recovered get() = runtime.recovered
     val commandPending get() = runtime.commandPending
+    val legacyMedia get() = runtime.legacyMedia
     var boundLens: CameraLens
         get() = runtime.boundLens
         set(value) { runtime.boundLens = value }
@@ -57,6 +58,7 @@ private class RecordingRuntime(private val application: Application) {
     private val state = MutableStateFlow(RecordingSnapshot())
     val recovered = MutableStateFlow(false)
     val commandPending = MutableStateFlow(false)
+    val legacyMedia = MutableStateFlow<com.calvinmazhindu.skitcam.video.SegmentMediaFacts?>(null)
     @Volatile var boundLens = CameraLens.Rear
     val snapshots = state.asStateFlow()
     val audio = com.calvinmazhindu.skitcam.audio.AudioMonitor(application, ::audioChanged)
@@ -78,6 +80,8 @@ private class RecordingRuntime(private val application: Application) {
                 !recovered.value -> "Wait for session recovery."
                 !cameraReady -> "Wait for the camera preview."
                 engineLensMismatch() -> "The original session camera is not ready."
+                engine.snapshot.session?.invalidProfileJson!=null && engine.snapshot.openSession -> "The saved capture profile is invalid. STOP preserves the session."
+                engine.snapshot.openSession && port.profile?.let { bound -> engine.snapshot.session?.captureProfile?.let { !it.sameConfiguration(bound) } }==true -> "The original recording profile is unavailable. RESUME is blocked."
                 !hasPermission(Manifest.permission.CAMERA) -> "Camera permission is required."
                 !hasPermission(Manifest.permission.RECORD_AUDIO) -> "Microphone permission is required."
                 else -> null
@@ -91,17 +95,21 @@ private class RecordingRuntime(private val application: Application) {
     init { worker.execute {
         engine.restore()
         engine.snapshot.session?.let { try { ExportJournal.restore(application,it) } catch(_: Exception) {} }
+        engine.snapshot.session?.takeIf { engine.snapshot.openSession && it.captureProfile==null && it.invalidProfileJson==null }?.let { session ->
+            legacyMedia.value=session.segments.sortedBy { it.order }.firstNotNullOfOrNull { segment -> runCatching { com.calvinmazhindu.skitcam.video.VideoInspector.inspect(segment.path) }.getOrNull() }
+        }
         recovered.value = true
     } }
     private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(
         application, permission) == PackageManager.PERMISSION_GRANTED
     private fun engineLensMismatch() = engine.snapshot.openSession && engine.snapshot.session?.lens != boundLens
     fun start(orientation: Int?) {
+        val profile = port.profile ?: return
         if(!cameraReady || commandPending.value) return
         commandPending.value = true
-        worker.execute { try { engine.start(orientation, boundLens) } finally { commandPending.value = false } }
+        worker.execute { try { engine.start(orientation, boundLens, profile) } finally { commandPending.value = false } }
     }
-    fun resume(orientation: Int?) = worker.execute { engine.resume(orientation) }
+    fun resume(orientation: Int?) = worker.execute { engine.resume(orientation,port.profile) }
     fun pause() = worker.execute { engine.pause() }
     fun stop() = worker.execute {
         val session=engine.snapshot.session

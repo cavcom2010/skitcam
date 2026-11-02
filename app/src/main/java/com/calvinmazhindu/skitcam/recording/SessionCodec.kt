@@ -1,6 +1,7 @@
 package com.calvinmazhindu.skitcam.recording
 
 import com.calvinmazhindu.skitcam.trim.TrimRange
+import com.calvinmazhindu.skitcam.video.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -9,11 +10,13 @@ import java.util.UUID
 object SessionCodec {
     fun encode(session: Session): String {
         check(session.validPlaybackOrder()) { "Invalid segment identity or playback order." }
-        return JSONObject().put("version", 5).put("lens", session.lens.name).put("id", session.id)
+        return JSONObject().put("version", 6).put("lens", session.lens.name).put("id", session.id)
         .put("createdAtMs", session.createdAtMs).put("orientationDegrees", session.orientationDegrees)
+        .put("captureProfile", session.invalidProfileJson?.let { JSONObject(it).get("value") } ?: session.captureProfile?.let(VideoJson::profile) ?: JSONObject.NULL)
         .put("state", session.state.name).put("error", session.error ?: JSONObject.NULL)
         .put("segments", JSONArray().apply {
             session.segments.forEach { segment -> put(JSONObject()
+                .put("media", segment.media?.let(VideoJson::media) ?: JSONObject.NULL)
                 .put("order", segment.order).put("path", segment.path)
                 .put("durationMs", segment.durationMs).put("orientationDegrees", segment.orientationDegrees)
                 .put("trim", segment.invalidTrimJson?.let { JSONObject(it).get("value") } ?: segment.trim?.let {
@@ -29,7 +32,7 @@ object SessionCodec {
     fun decode(text: String): Session {
         val json = JSONObject(text)
         val version = json.getInt("version")
-        check(version in 1..5) { "Unknown session metadata version." }
+        check(version in 1..6) { "Unknown session metadata version." }
         val sessionId = json.getString("id")
         val segments = json.getJSONArray("segments")
         val history =
@@ -49,18 +52,21 @@ object SessionCodec {
                     it.getInt("orientationDegrees"), it.getInt("videoRotationDegrees"),
                     if (version == 1) true else it.getBoolean("kept"),
                     if (version >= 3) it.getString("id") else UUID.nameUUIDFromBytes(
-                        "skitcam:$sessionId:segment:${it.getInt("order")}".toByteArray(Charsets.UTF_8)).toString(), trim, invalid)
+                        "skitcam:$sessionId:segment:${it.getInt("order")}".toByteArray(Charsets.UTF_8)).toString(), trim, invalid, if(version>=6 && !it.isNull("media")) VideoJson.media(it.getJSONObject("media")) else null)
             } }
         check(history.all { it.order > 0 } && history.map { it.order }.distinct().size == history.size) {
             "Invalid recording chronology."
         }
         val playback = if (version < 3) history.filter { it.kept }.sortedBy { it.order }.map { it.id }
             else json.getJSONArray("playbackOrder").let { ids -> List(ids.length()) { ids.getString(it) } }
+        val rawProfile = if(version>=6 && !json.isNull("captureProfile")) json.get("captureProfile") else null
+        val profile = runCatching { rawProfile?.let { VideoJson.profile(it as JSONObject) } }.getOrNull()
+        val invalidProfile = if(rawProfile!=null && profile==null) JSONObject().put("value",rawProfile).toString() else null
         val session = Session(sessionId, json.getLong("createdAtMs"),
             json.getInt("orientationDegrees"), RecordingState.valueOf(json.getString("state")), history,
             if (json.isNull("pending")) null else json.getJSONObject("pending").let {
                 PendingSegment(it.getString("id"), it.getString("path"), it.getInt("order"))
-            }, if (json.isNull("error")) null else json.getString("error"), playback, if (version >= 5) CameraLens.valueOf(json.getString("lens")) else CameraLens.Rear)
+            }, if (json.isNull("error")) null else json.getString("error"), playback, if (version >= 5) CameraLens.valueOf(json.getString("lens")) else CameraLens.Rear, profile, invalidProfile)
         check(session.validPlaybackOrder()) { "Invalid segment identity or playback order." }
         return session
     }

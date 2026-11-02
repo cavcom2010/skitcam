@@ -5,6 +5,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.calvinmazhindu.skitcam.MainActivity
+import com.calvinmazhindu.skitcam.camera.CameraMode
 import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.export.*
 import org.junit.*
@@ -31,8 +32,14 @@ class AudioDeviceTest {
         var owned: String?=null
         try {
             scenario.onActivity { model=it.recordingModel }
+            await("session recovery") { model.recovered.value }
             Assume.assumeTrue("Preserve user recording",!ExportJournal.busy && model.snapshots.value.state in setOf(RecordingState.Ready,RecordingState.Completed))
-            ExportTestSupport.beforeCamera();await("camera") { model.cameraReady }
+            ExportTestSupport.beforeCamera()
+            lateinit var camera: com.calvinmazhindu.skitcam.camera.CameraModel
+            scenario.onActivity { camera=it.cameraModel }
+            await("camera stream") { camera.streaming }
+            scenario.onActivity { camera.select(CameraMode.SkitVideo,CameraLens.Rear,true) }
+            await("video camera") { model.cameraReady && camera.streaming && !camera.switching && camera.choice.mode==CameraMode.SkitVideo }
             await("built-in microphone discovery") { model.audio.state.value.inputs.any { it.kind==InputKind.BuiltIn } }
             model.start(0);await("recording") { model.snapshots.value.state==RecordingState.Recording }
             owned=model.snapshots.value.session!!.id

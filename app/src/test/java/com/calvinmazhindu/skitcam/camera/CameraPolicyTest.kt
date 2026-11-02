@@ -51,7 +51,7 @@ class CameraPolicyTest {
         val b=Segment(2,"/two.mp4",2000,0,90,id="b",kept=false)
         val session=Session("s",42,0,RecordingState.Paused,listOf(a,b),lens=CameraLens.Front)
         val json=SessionCodec.encode(session)
-        assertEquals(5,JSONObject(json).getInt("version"))
+        assertEquals(6,JSONObject(json).getInt("version"))
         assertEquals(session,SessionCodec.decode(json))
     }
     @Test fun legacyVersionsDefaultRearWithoutMutatingOriginalJson() {
@@ -64,7 +64,7 @@ class CameraPolicyTest {
     }
     @Test fun unknownLensAndFutureVersionRejected() {
         val json=JSONObject(SessionCodec.encode(Session("s",1,0,RecordingState.Paused)))
-        for(bad in listOf(json.toString().replace("Rear","Unsupported"),json.put("version",6).toString())) {
+        for(bad in listOf(json.toString().replace("Rear","Unsupported"),json.put("version",7).toString())) {
             assertThrows(Exception::class.java) { SessionCodec.decode(bad) }
         }
     }

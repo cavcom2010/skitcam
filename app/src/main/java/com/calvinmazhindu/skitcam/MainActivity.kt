@@ -1,5 +1,7 @@
 package com.calvinmazhindu.skitcam
 
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -84,6 +86,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onPause() {
         photoModel.cancelTimer()
+        cameraModel.video.background()
         cameraModel.idle()
         recordingModel.cameraReady = false
         recordingModel.audio.foreground(false)
@@ -109,6 +112,8 @@ private fun MainActivity.CameraScreen() {
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
     val camera = cameraModel
+    camera.video.canEdit = { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.canChange(recordingModel.snapshots.value,recordingModel.commandPending.value,ExportJournal.busy) && recordingModel.recovered.value && camera.choice.mode==CameraMode.SkitVideo && camera.streaming && !camera.switching && !photoModel.busy }
+    camera.video.beforeChange = { recordingModel.cameraReady = false }
     val photos = photoModel
     val finishing = camera.loaded && export?.sessionId == snapshot.session?.id && export != null && camera.acknowledgedExport != export?.sessionId
     LaunchedEffect(camera.loaded, recovered) {
@@ -126,12 +131,12 @@ private fun MainActivity.CameraScreen() {
             val time = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching { ExportJournal.read(this@CameraScreen,result.sessionId)?.getLong("createdAt") }.getOrNull()
             }
-            if(time != null) camera.media(Uri.parse(result.uri),"video/mp4",time)
+            if(time != null) camera.media(result.uri.toUri(),"video/mp4",time)
         }
     }
     val photo = camera.choice.mode == CameraMode.Photo
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
-        finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value) && camera.streaming
+        finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
     fun selectCamera(mode: CameraMode = camera.choice.mode, lens: CameraLens? = null) {
         val old = camera.choice
@@ -158,9 +163,9 @@ private fun MainActivity.CameraScreen() {
     fun openMedia() {
         val uri = camera.latestUri ?: return
         try {
-            contentResolver.openInputStream(Uri.parse(uri))!!.use { check(it.read() >= 0) }
-            if(camera.latestType == "video/mp4") startActivity(Intent(this,FinishedPlaybackActivity::class.java).setData(Uri.parse(uri)))
-            else startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri),camera.latestType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            contentResolver.openInputStream(uri.toUri())!!.use { check(it.read() >= 0) }
+            if(camera.latestType == "video/mp4") startActivity(Intent(this,FinishedPlaybackActivity::class.java).setData(uri.toUri()))
+            else startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri.toUri(),camera.latestType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch(_: Exception) { camera.message = "Saved media is unavailable, or no compatible viewer is installed." }
     }
     val trimming = trimModel.segment != null
@@ -193,7 +198,7 @@ private fun MainActivity.CameraScreen() {
     }
     val requestPermission = {
         requested = true
-        preferences.edit().putBoolean("requested", true).apply()
+        preferences.edit { putBoolean("requested", true) }
         launcher.launch(Manifest.permission.CAMERA)
     }
     LaunchedEffect(Unit) {
@@ -231,7 +236,7 @@ private fun MainActivity.CameraScreen() {
                 onAction = {
                     if (needsSettings) {
                         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.parse("package:$packageName")))
+                            "package:$packageName".toUri()))
                     } else requestPermission()
                 }
             )
@@ -324,9 +329,9 @@ private fun MainActivity.CameraScreen() {
             }
         }
         if(quick && !editors) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp)) {
-            CameraTools(camera,false,adjustments) { quick=false }
+            CameraTools(camera,false,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession) { quick=false }
         }
-        if(settings && maySwitch) CameraTools(camera,true,adjustments) { settings=false }
+        if(settings && maySwitch) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession) { settings=false }
         if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }

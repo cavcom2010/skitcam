@@ -1,6 +1,9 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Milestone 9 adds camera-specific video quality, FPS targets, session profile locking,
+confirmed AE/WB controls and optional electronic stabilisation. See
+[VALIDATION_M9.md](VALIDATION_M9.md) for measured output and remaining checks.
 Milestone 8 adds Photo / Skit Video modes, JPEG capture, camera switching, focus,
 zoom and a camera-first interface. See [VALIDATION_M8.md](VALIDATION_M8.md) for
 measured capabilities, validation results and remaining checks.
@@ -56,13 +59,58 @@ Original video segments and session metadata are never cleaned up automatically.
 
 Preview binds with ImageCapture in Photo and the existing Recorder in Skit Video.
 The app does not require all three use cases simultaneously. Camera adjustments
-never rebind the recording camera. The video indicator shows bound resolution and
+never rebind an actively recording camera. Idle profile changes rebind safely. The video indicator shows bound resolution and
 **Auto FPS**, rather than claiming a measured capture frame rate.
 
-New session metadata is version **5**, adding `lens: "Rear" | "Front"`. Versions
-1–4 load as Rear without a startup rewrite. Existing v4 integer trim boundaries,
+New session metadata is version **6**, retaining the v5 `lens` and adding an optional
+immutable `captureProfile` plus observed per-segment `media` facts. Versions 1–5
+remain readable without a startup rewrite (versions 1–4 default to Rear). Existing v4 integer trim boundaries,
 segment IDs, chronology, Keep status and playback order are unchanged. A normal
 subsequent user edit saves through the same atomic repository in the latest format.
+
+
+## Video capture settings (0.9.0)
+
+Before START, open **Quick** or **Settings** to select a quality reported by the
+active camera's CameraX SDR capabilities. The Moto G54 reports FHD/HD/SD; it does
+not expose UHD through this pipeline. Front/rear preferences are separate. A
+profile preference is committed only after binding, streaming and any requested
+white-balance confirmation succeed. Unsupported saved preferences cannot force
+an unsupported binding. Capture uses CameraX automatic bitrate/encoder selection;
+every completed segment must independently verify as AVC video plus AAC audio.
+
+FPS choices are labelled **targets**, not measured constant-rate guarantees.
+Configuration-specific CameraX ranges determine availability. Auto remains the
+default. The Moto G54 offers a verified rear FHD 60 target and 30 targets for
+reported profiles; fixed 24/25 targets are absent. Front/HD/SD do not offer 60. Actual sample counts,
+presentation timestamp span, cadence variation, dimensions, codecs, audio format
+and measured video payload bitrate are saved after successful finalisation.
+A nominal 30 fps request may still contain dropped/variable intervals. Sustained
+60-target output measured about 49 fps in one device run even with a 60 sensor
+request, so the UI warns and recommends Auto/30 for dialogue. This is not CFR 60.
+
+The full capture profile freezes at START and remains unchanged through PAUSE,
+review, trimming, arrangement, RESUME and recovery. Quality, FPS, electronic
+stabilisation and white balance cannot be reconfigured mid-session. Unsupported
+recovery profiles leave the live preview available where feasible and block
+RESUME; STOP preserves the files. Legacy paused sessions infer a conservative
+Auto-FPS profile from an actual readable source and require the same dimensions
+before resuming. They are not rewritten merely by opening the app.
+
+AE lock is distinct from EV compensation and is labelled locked only after a
+Camera2 capture result confirms it. **Hold focus** uses CameraX AF metering with
+auto-cancel disabled; a successful focus result is required. It returns to Auto
+when released, backgrounded or rebound. Fixed-focus cameras show no AF hold.
+White-balance presets use only reported modes and require capture-result
+confirmation. They are session settings. These narrow Camera2 options never
+force sensor frame rates, ISO, shutter speed or custom AF modes.
+
+Electronic stabilisation is offered only when reported by CameraX, with supported
+SD/HD/FHD, at-most-30 targets. Its status distinguishes a request from an observed
+camera result. Optical stabilisation remains device-managed. Cropping and visual
+effectiveness need scene/motion validation; a reported capability alone is not an
+image-quality claim. HDR, HEVC, manual bitrate/ISO/shutter and slow motion remain
+out of scope. The existing **100 ms** export timing gate is unchanged.
 
 ## Recording
 
@@ -82,8 +130,10 @@ Hold the phone upright and steady before START. The physical orientation must
 match the preview. UI and video orientation stay locked for the entire session;
 RESUME is blocked until the phone returns to the exact original direction,
 including which edge is up. Flat or uncertain sensor readings cannot enable
-recording. The recording quality defaults to HD (720p), with CameraX-supported
-fallback when necessary.
+recording. New sessions default to FHD (1080p), Auto FPS, SDR, Auto bitrate and
+electronic stabilisation Off. Unavailable saved qualities fall back in the order
+FHD → HD → SD → UHD before a new session; interrupted sessions never silently
+fall back to a different profile.
 
 Leaving the foreground stops/finalises the active segment and pauses on success.
 Returning never resumes automatically. Errors retain confirmed segments and any
@@ -272,7 +322,8 @@ files/sessions/<session-id>/
 
 Metadata records session state, timestamps, ordered segments, recording duration,
 physical orientation, encoded video rotation, absolute file paths, errors and
-the pending attempt and the session lens. Version 5 retains immutable segment IDs and a separate
+the pending attempt, lens, immutable capture profile and observed source properties.
+Version 6 retains immutable segment IDs and a separate
 `playbackOrder` list of kept IDs. Versions 1/2 load deterministic IDs derived from
 session ID and recording number, with chronological playback order; version 1
 defaults every successful segment to Keep. Legacy metadata upgrades only on a
@@ -349,7 +400,12 @@ official distribution SHA-256. Wrapper files must be retained in source control.
         ├── AndroidManifest.xml
         ├── java/com/calvinmazhindu/skitcam/
         │   ├── MainActivity.kt     # Camera permission and lifecycle entry point
-        │   ├── CameraPreview.kt    # Preview + video use-case binding
+        │   ├── CameraPreview.kt    # Mode-specific preview/use-case binding
+        │   ├── camera/            # Modes, camera controls and preferences
+        │   ├── video/             # Capture profiles, capabilities and source facts
+        │   ├── photo/             # JPEG capture, validation and publication
+        │   ├── audio/             # Truthful input discovery and recording health
+        │   ├── export/            # Composition, verification and gallery publishing
         │   ├── recording/         # State machine, CameraX adapter, metadata,
         │   │                      # orientation, ViewModel and controls
         │   ├── review/            # Lazy thumbnails, review UI and player ownership
@@ -368,16 +424,19 @@ current results. Earlier validation reports preserve the Milestone 1 and 2 resul
 
 ## Automatic MP4 finishing
 
-The Standard HD profile re-encodes to SDR H.264/AVC, at most 1280 × 720 (or its
-portrait display equivalent), with AAC-LC 48 kHz stereo audio. Smaller sources are
-not enlarged. Incompatible aspect ratios, HDR, missing tracks or broken retained
+New profiled sessions re-encode to SDR H.264/AVC at their saved source dimensions
+and preserve source presentation cadence, with AAC-LC 48 kHz stereo audio. Capture
+and export bitrates are automatic; measured source bitrate is recorded separately.
+Legacy sessions/jobs retain the previous at-most-720p, 30 fps cap and 4 Mbps export
+policy. Smaller sources are not enlarged. Incompatible aspect ratios, HDR, missing tracks or broken retained
 sources fail explicitly. There is no silent skipping, cropping, stretching or
 source cleanup. Arbitrary frame rates and encoder properties require device
 validation; export is not advertised as frame accurate.
 
 Each session has an atomic `export/job.json` sidecar containing its immutable
 recording snapshot, ordered clip boundaries, source hashes, processing state,
-verification result and final MediaStore URI. Session schema 4 is unchanged.
+verification result and final MediaStore URI. Export job version 2 also freezes
+the session capture profile; legacy version 1 jobs keep their original output policy.
 After interruption, Retry restarts encoding or reuses a verified output checkpoint;
 it does not resume an encoder at its previous frame. Publication uses a unique
 job marker and pending MediaStore row to avoid duplicate gallery videos.

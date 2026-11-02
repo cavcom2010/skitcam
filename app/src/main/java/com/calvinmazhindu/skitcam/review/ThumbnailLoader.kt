@@ -1,6 +1,7 @@
 package com.calvinmazhindu.skitcam.review
 
 import android.graphics.Bitmap
+import androidx.core.graphics.scale
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.LruCache
@@ -42,7 +43,7 @@ class ThumbnailLoader {
                 } else {
                     retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { original ->
                         val scale = 160f / maxOf(original.width, original.height)
-                        val scaled = Bitmap.createScaledBitmap(original,
+                        val scaled = original.scale(
                             (original.width * scale).toInt().coerceAtLeast(1),
                             (original.height * scale).toInt().coerceAtLeast(1), true)
                         if (scaled !== original) original.recycle()

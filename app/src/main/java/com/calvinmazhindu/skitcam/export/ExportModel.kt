@@ -1,16 +1,18 @@
 package com.calvinmazhindu.skitcam.export
 
 import com.calvinmazhindu.skitcam.recording.*
+import com.calvinmazhindu.skitcam.video.CaptureProfile
 import com.calvinmazhindu.skitcam.trim.TrimRange
 
 enum class ExportState { Preparing, Exporting, Verifying, Publishing, Completed, Failed, Cancelled, Empty }
 data class ExportClip(val id: String, val path: String, val range: TrimRange)
-data class ExportSpec(val sessionId: String, val orientation: Int, val clips: List<ExportClip>) {
+data class ExportSpec(val sessionId: String, val orientation: Int, val clips: List<ExportClip>, val captureProfile: CaptureProfile? = null) {
     val durationMs: Long get() = clips.fold(0L) { sum, item -> Math.addExact(sum,item.range.effectiveDurationMs) }
     companion object {
         fun from(session: Session, duration: (Segment) -> Long): ExportSpec {
             require(session.state == RecordingState.Completed && session.pending == null && session.error == null) { "Recording did not finalise successfully. Original files are retained." }
             require(session.retainedCount <= RecordingEngine.MAX_SEGMENTS) { "Too many retained segments." }
+            require(session.invalidProfileJson==null && session.captureProfile?.valid()!=false) { "Invalid capture profile. Sources retained." }
             require(session.validPlaybackOrder()) { "Invalid saved playback order." }
             val clips = session.playbackSegments.map { segment ->
                 require(segment.orientationDegrees == session.orientationDegrees) { "Segment ${segment.order}: orientation differs." }
@@ -25,7 +27,7 @@ data class ExportSpec(val sessionId: String, val orientation: Int, val clips: Li
                 require(range.valid() && range.trimEndMs <= observed) { "Segment ${segment.order}: trim is outside the source." }
                 ExportClip(segment.id,segment.path,range)
             }
-            return ExportSpec(session.id,session.orientationDegrees,clips).also { it.durationMs }
+            return ExportSpec(session.id,session.orientationDegrees,clips,session.captureProfile).also { it.durationMs }
         }
     }
 }

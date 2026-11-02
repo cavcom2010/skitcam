@@ -13,9 +13,23 @@ import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CameraRecordingPort(private val context: Context, private val events: Executor, private val audio: com.calvinmazhindu.skitcam.audio.AudioMonitor) : RecordingPort {
-    val capture: VideoCapture<Recorder> = VideoCapture.Builder(Recorder.Builder()
-        .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)))
-        .build()).setMirrorMode(androidx.camera.core.MirrorMode.MIRROR_MODE_OFF).build()
+    var capture: VideoCapture<Recorder> = createCapture(com.calvinmazhindu.skitcam.video.VideoSettings("HD"))
+        private set
+    @Volatile var profile: com.calvinmazhindu.skitcam.video.CaptureProfile? = null
+        private set
+    fun prepare(settings: com.calvinmazhindu.skitcam.video.VideoSettings): VideoCapture<Recorder> {
+        check(Looper.myLooper()==Looper.getMainLooper() && activeStop==null) { "Cannot reconfigure a recording." }
+        return createCapture(settings).also { capture=it;profile=null }
+    }
+    fun bound(value: com.calvinmazhindu.skitcam.video.CaptureProfile) { profile=value }
+    private fun createCapture(settings: com.calvinmazhindu.skitcam.video.VideoSettings): VideoCapture<Recorder> {
+        val quality = when(settings.quality) { "FHD" -> Quality.FHD; "UHD" -> Quality.UHD; "SD" -> Quality.SD; else -> Quality.HD }
+        return VideoCapture.Builder(Recorder.Builder().setQualitySelector(QualitySelector.from(quality)).build())
+            .setDynamicRange(androidx.camera.core.DynamicRange.SDR)
+            .setMirrorMode(androidx.camera.core.MirrorMode.MIRROR_MODE_OFF)
+            .setVideoStabilizationEnabled(settings.stabilization)
+            .apply { settings.fps?.let { setTargetFrameRate(android.util.Range(it,it)) } }.build()
+    }
     var beforeStart: ((Int) -> Unit)? = null // Main-thread activity orientation lock.
     private val main = ContextCompat.getMainExecutor(context)
     private var activeStop: (() -> Unit)? = null
@@ -26,10 +40,13 @@ class CameraRecordingPort(private val context: Context, private val events: Exec
 
     override fun start(pending: PendingSegment, orientationDegrees: Int,
         listener: (RecorderEvent) -> Unit): RecordingHandle {
+        val expectedProfile = profile
+        val expectedCapture = capture
         val stopped = AtomicBoolean(false)
         var recording: Recording? = null // Accessed exclusively on main; held strongly until Finalize.
         main.execute {
             try {
+                check(profile==expectedProfile && capture===expectedCapture && expectedProfile!=null) { "The recording profile changed before START." }
                 check(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                     "Microphone permission is required."
                 }

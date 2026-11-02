@@ -53,7 +53,9 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
     val sizes=spec.clips.map { inspect(File(it.path)) }
     val first=sizes.first()
     require(sizes.all { kotlin.math.abs(it.width.toDouble()/it.height-first.width.toDouble()/first.height)<0.005 }) { "Segments have incompatible display aspect ratios." }
-    val scale=minOf(1.0,720.0/minOf(first.width,first.height),1280.0/maxOf(first.width,first.height),
+    val matching=spec.captureProfile?.takeUnless { it.legacy }
+    matching?.let { profile -> require(sizes.all { maxOf(it.width,it.height)==maxOf(profile.width,profile.height) && minOf(it.width,it.height)==minOf(profile.width,profile.height) }) { "Sources do not match the immutable export profile." } }
+    val scale=minOf(1.0,if(matching==null) 720.0/minOf(first.width,first.height) else 1.0,if(matching==null) 1280.0/maxOf(first.width,first.height) else 1.0,
         sizes.minOf { minOf(it.width.toDouble()/first.width,it.height.toDouble()/first.height) })
     val width=((first.width*scale).toInt()/2*2).coerceAtLeast(2)
     val height=((first.height*scale).toInt()/2*2).coerceAtLeast(2)
@@ -66,7 +68,7 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
         val item=MediaItem.Builder().setUri(Uri.fromFile(File(clip.path)))
             .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.range.trimStartMs).setEndPositionMs(clip.range.trimEndMs).build()).build()
         val videoEffects=mutableListOf<androidx.media3.common.Effect>(Presentation.createForWidthAndHeight(width,height,Presentation.LAYOUT_SCALE_TO_FIT))
-        EditedMediaItem.Builder(item).setFrameRate(30).setEffects(Effects(listOf(channels,sonic),videoEffects)).build()
+        EditedMediaItem.Builder(item).apply { if(matching==null) setFrameRate(30) }.setEffects(Effects(listOf(channels,sonic),videoEffects)).build()
     }
     val composition=Composition.Builder(EditedMediaItemSequence.withAudioAndVideoFrom(items))
         .setTransmuxAudio(false).setTransmuxVideo(false).build()
@@ -75,7 +77,7 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
     handler.post {
         try {
             val delegate=DefaultEncoderFactory.Builder(context).setEnableFallback(false)
-                .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(4_000_000).build())
+                .apply { if(matching==null) setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(4_000_000).build()) }
                 .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(128_000).setProfile(MediaCodecInfo.CodecProfileLevel.AACObjectLC).build()).build()
             val factory=object : Codec.EncoderFactory by delegate {
                 override fun audioNeedsEncoding()=true

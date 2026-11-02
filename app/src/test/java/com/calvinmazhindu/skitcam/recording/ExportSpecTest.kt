@@ -40,6 +40,15 @@ class ExportSpecTest {
         assertEquals(0,ExportSpec.from(later) { 2000 }.clips.size)
         assertEquals(frozen,ExportSpec.from(SessionCodec.decode(SessionCodec.encode(original))) { 2000 })
     }
+    @Test fun profileIsPartOfImmutableExportContract() {
+        val profile=com.calvinmazhindu.skitcam.video.CaptureProfile("0",com.calvinmazhindu.skitcam.video.VideoSettings(fps=30),1920,1080)
+        val original=session().copy(captureProfile=profile)
+        val spec=ExportSpec.from(original) { 2000 }
+        assertEquals(profile,spec.captureProfile)
+        assertEquals(spec,ExportSpec.from(SessionCodec.decode(SessionCodec.encode(original))) { 2000 })
+        assertNull(ExportSpec.from(session()) { 2000 }.captureProfile)
+        assertThrows(IllegalArgumentException::class.java) { ExportSpec.from(original.copy(captureProfile=null,invalidProfileJson="{}")) { 2000 } }
+    }
     @Test fun stageTransitionsCannotPublishBeforeVerification() {
         assertFalse(exportTransitionAllowed(ExportState.Exporting,ExportState.Completed))
         assertFalse(exportTransitionAllowed(ExportState.Verifying,ExportState.Completed))

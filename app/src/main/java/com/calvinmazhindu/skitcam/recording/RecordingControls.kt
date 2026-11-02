@@ -1,5 +1,7 @@
 package com.calvinmazhindu.skitcam.recording
 
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -99,10 +101,10 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
     val requestAudio = {
         if (requested && !rationale) {
             activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:${activity.packageName}")))
+                "package:${activity.packageName}".toUri()))
         } else {
             requested = true
-            preferences.edit().putBoolean("requested", true).apply()
+            preferences.edit { putBoolean("requested", true) }
             microphoneLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }

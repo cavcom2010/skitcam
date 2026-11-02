@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.photo
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.*
 import android.content.pm.PackageManager
@@ -61,7 +62,7 @@ class PhotoStore(private val context: Context, private val freeBytes: () -> Long
     fun publish(dir: File): Pair<Uri, PhotoFacts> {
         val job = read(dir)
         if(job.getString("state") == "Completed") {
-            val uri = Uri.parse(job.getString("uri"))
+            val uri = job.getString("uri").toUri()
             check(hash { context.contentResolver.openInputStream(uri)!! } == job.getString("sha256")) { "Published photo is missing or changed." }
             return uri to PhotoFacts(job.getInt("width"),job.getInt("height"),job.getInt("orientation"))
         }
@@ -143,7 +144,7 @@ class PhotoStore(private val context: Context, private val freeBytes: () -> Long
     }
     fun latestPublished(): Pair<Uri,Long>? = root.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { dir ->
         runCatching { read(dir).takeIf { it.getString("state") == "Completed" } }.getOrNull()
-    }.maxByOrNull { it.getLong("createdAt") }?.let { Uri.parse(it.getString("uri")) to it.getLong("createdAt") }
+    }.maxByOrNull { it.getLong("createdAt") }?.let { it.getString("uri").toUri() to it.getLong("createdAt") }
     private fun hash(open: () -> java.io.InputStream): String = open().use { input ->
         val digest = MessageDigest.getInstance("SHA-256"); val buffer = ByteArray(65536)
         while(true) { val size = input.read(buffer); if(size < 0) break; digest.update(buffer,0,size) }

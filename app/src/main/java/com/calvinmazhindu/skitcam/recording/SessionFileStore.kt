@@ -49,6 +49,7 @@ class SessionFileStore(private val root: File) : SessionStore {
         check(length == file.length() && modified == file.lastModified()) { "Source changed." }
         return SourceFacts(duration, length, modified)
     }
+    override fun mediaFacts(path: String) = com.calvinmazhindu.skitcam.video.VideoInspector.inspect(path)
     override fun validate(path: String): Int {
         val file = File(path)
         check(file.isFile && file.length() > 0) { "Recorded file is empty or missing." }

@@ -1,5 +1,6 @@
 package com.calvinmazhindu.skitcam.export
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.content.*
 import android.net.Uri
@@ -57,9 +58,9 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
             Text(feedback ?: status.message ?: "Finishing your video. Original recordings are preserved.")
             if(status.active && status.state!=ExportState.Publishing) TextButton(colors=ButtonDefaults.textButtonColors(contentColor=Color(0xFFF2D4BC)),onClick={ExportJournal.cancelRequested=true}) { Text("Cancel") }
             if(status.state==ExportState.Completed && status.uri!=null) {
-                Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={context.startActivity(Intent(context,FinishedPlaybackActivity::class.java).setData(Uri.parse(status.uri)))}) { Text("Play") }
+                Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={context.startActivity(Intent(context,FinishedPlaybackActivity::class.java).setData(status.uri.toUri()))}) { Text("Play") }
                 Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={
-                    val uri=Uri.parse(status.uri)
+                    val uri=status.uri.toUri()
                     val intent=Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM,uri)
                         .apply { clipData=ClipData.newRawUri("SkitCam video",uri);addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
                     context.startActivity(Intent.createChooser(intent,"Share video"))

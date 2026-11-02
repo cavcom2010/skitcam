@@ -1,6 +1,7 @@
 package com.calvinmazhindu.skitcam.recording
 
 import com.calvinmazhindu.skitcam.trim.*
+import com.calvinmazhindu.skitcam.video.*
 import java.io.File
 import java.util.UUID
 
@@ -11,7 +12,7 @@ enum class RecordingState { Ready, Starting, Recording, Finalising, Paused, Stop
 data class Segment(val order: Int, val path: String, val durationMs: Long,
     val orientationDegrees: Int, val videoRotationDegrees: Int, val kept: Boolean = true,
     val id: String = UUID.randomUUID().toString(), val trim: TrimRange? = null,
-    val invalidTrimJson: String? = null) {
+    val invalidTrimJson: String? = null, val media: SegmentMediaFacts? = null) {
     val effectiveDurationMs: Long? get() = trim?.takeIf { it.valid() }?.effectiveDurationMs
     val displayDurationMs get() = effectiveDurationMs ?: if (invalidTrimJson == null) durationMs.coerceAtLeast(0) else 0L
 }
@@ -20,7 +21,8 @@ data class Session(val id: String, val createdAtMs: Long, val orientationDegrees
     val state: RecordingState, val segments: List<Segment> = emptyList(),
     val pending: PendingSegment? = null, val error: String? = null,
     val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id },
-    val lens: CameraLens = CameraLens.Rear) {
+    val lens: CameraLens = CameraLens.Rear, val captureProfile: CaptureProfile? = null,
+    val invalidProfileJson: String? = null) {
     val durationMs: Long get() = safeDurationSum(segments.filter { it.kept }.map { it.displayDurationMs })
     val durationEstimated get() = segments.any { it.kept && it.trim == null }
     val retainedCount: Int get() = segments.count { it.kept }
@@ -59,6 +61,7 @@ interface SessionStore {
     fun freeBytes(): Long
     /** Must verify a nonempty MP4 containing video and audio. Returns encoded rotation. */
     fun sourceFacts(path: String): SourceFacts? = null
+    fun mediaFacts(path: String): SegmentMediaFacts? = null
     fun validate(path: String): Int
 }
 fun interface Cancellation { fun cancel() }
@@ -121,23 +124,28 @@ class RecordingEngine(
             fail("Session metadata could not be read. Files are retained. STOP acknowledges this error.")
         }
     }
-    fun start(orientation: Int?, lens: CameraLens = CameraLens.Rear) {
+    fun start(orientation: Int?, lens: CameraLens = CameraLens.Rear, profile: CaptureProfile? = null) {
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed) || activeId != null) return
         if (!checkOrientation(orientation, null)) return
         val unavailable = availability()
         if (unavailable != null) { publish(message = unavailable); return }
+        if(profile!=null && !profile.valid()) { publish(message="Invalid recording profile."); return }
         val id = UUID.randomUUID().toString()
         terminalReason = null
-        publish(RecordingState.Starting, Session(id, now(), orientation!!, RecordingState.Starting, lens = lens), 0, null)
+        publish(RecordingState.Starting, Session(id, now(), orientation!!, RecordingState.Starting, lens = lens, captureProfile = profile?.copy(legacy=false)), 0, null)
         beginSegment()
     }
-    fun resume(orientation: Int?) {
+    fun resume(orientation: Int?, recoveredProfile: CaptureProfile? = null) {
         if (snapshot.state != RecordingState.Paused || activeId != null) return
         if (snapshot.count >= MAX_SEGMENTS) { publish(message = "100 segment limit reached. Press STOP."); return }
         if (!checkOrientation(orientation, snapshot.session!!.orientationDegrees)) return
         val unavailable = availability()
         if (unavailable != null) { publish(message = unavailable); return }
-        publish(RecordingState.Starting, duration = 0, message = null)
+        val original=snapshot.session!!
+        if(original.invalidProfileJson!=null || recoveredProfile?.valid()==false || (original.captureProfile!=null && (recoveredProfile==null || !original.captureProfile.sameConfiguration(recoveredProfile)))) {
+            publish(message="Original capture profile unavailable. STOP retains this session.");return
+        }
+        publish(RecordingState.Starting, session=if(original.captureProfile==null && recoveredProfile!=null) original.copy(captureProfile=recoveredProfile) else original, duration = 0, message = null)
         beginSegment()
     }
     private fun checkOrientation(actual: Int?, expected: Int?): Boolean {
@@ -324,8 +332,12 @@ class RecordingEngine(
             check(event.durationMs > 0) { "Recording contained no valid duration." }
             val rotation = store.validate(pending.path)
             val source = store.sourceFacts(pending.path)
+            val media = store.mediaFacts(pending.path)
+            session.captureProfile?.let { expected ->
+                check(media!=null && expected.accepts(media)) { "Recorded codec/dimensions do not match the locked session profile. Candidate retained." }
+            }
             val segment = Segment(pending.order, pending.path, event.durationMs,
-                session.orientationDegrees, rotation, id = pending.id, trim = source?.let { TrimRange.full(it.durationMs) })
+                session.orientationDegrees, rotation, id = pending.id, trim = source?.let { TrimRange.full(it.durationMs) }, media = media)
             val next = when {
                 terminalReason != null -> RecordingState.Error
                 requestedState == RecordingState.Stopping -> RecordingState.Completed

@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class CameraModel(application: Application) : AndroidViewModel(application) {
+    val video = com.calvinmazhindu.skitcam.video.VideoController(application)
     private val preferenceWrites = Mutex()
     private val prefs = application.getSharedPreferences("camera_preferences", 0)
     var loaded by mutableStateOf(false); private set
@@ -44,6 +45,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     private var camera: Camera? = null
     private var generation = 0
     private var focusToken = 0
+    private var lastMeteringPoint: MeteringPoint? = null
     private var initialized by mutableStateOf(false)
     init { viewModelScope.launch {
         withContext(Dispatchers.IO) {
@@ -58,6 +60,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         }
         loaded = true
     } }
+    override fun onCleared() { video.close();super.onCleared() }
     fun initialize(snapshot: com.calvinmazhindu.skitcam.recording.RecordingSnapshot, needsExport: Boolean) {
         if (initialized || !loaded) return
         choice = CameraPolicy.initial(committed, snapshot, needsExport)
@@ -100,7 +103,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (switching) { choice = committed; switching = false }
     }
     fun idle() { streaming = false; focusToken++; focus = null }
-    fun released() { camera = null; generation++; streaming = false; focus = null }
+    fun released() { video.release(); lastMeteringPoint=null; camera = null; generation++; streaming = false; focus = null }
     val observedZoom get() = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
     fun adjustZoom(ratio: Float) {
         val current = camera ?: return
@@ -123,11 +126,15 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     }
     fun focus(view: PreviewView, point: androidx.compose.ui.geometry.Offset) {
         val current = camera ?: return
-        val action = FocusMeteringAction.Builder(view.meteringPointFactory.createPoint(point.x, point.y))
+        val metering=view.meteringPointFactory.createPoint(point.x, point.y)
+        lastMeteringPoint=metering
+        val token = ++focusToken
+        video.holdFocus(false)
+        val action = FocusMeteringAction.Builder(metering)
             .setAutoCancelDuration(3, TimeUnit.SECONDS).build()
         if (!current.cameraInfo.isFocusMeteringSupported(action)) { message = "Tap focus unavailable on this camera."; return }
         focus = point; focusResult = "Focusing"
-        val token = ++focusToken; val binding = generation
+        val binding = generation
         val future = current.cameraControl.startFocusAndMetering(action)
         future.addListener({
             if (binding == generation && token == focusToken) {
@@ -135,6 +142,21 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
             }
         }, androidx.core.content.ContextCompat.getMainExecutor(getApplication()))
         viewModelScope.launch { kotlinx.coroutines.delay(2500); if (token == focusToken) focus = null }
+    }
+    fun toggleFocusHold() {
+        val current=camera ?: return
+        if(!video.autofocusSupported) return
+        val request=++focusToken
+        if(video.focusHold) { video.holdFocus(false);current.cameraControl.cancelFocusAndMetering();return }
+        val point=lastMeteringPoint ?: SurfaceOrientedMeteringPointFactory(1f,1f).createPoint(.5f,.5f)
+        val action=FocusMeteringAction.Builder(point,FocusMeteringAction.FLAG_AF).disableAutoCancel().build()
+        val token=generation
+        val future=current.cameraControl.startFocusAndMetering(action)
+        future.addListener({ if(token==generation && request==focusToken) runCatching {
+            val success=future.get().isFocusSuccessful
+            if(!success) current.cameraControl.cancelFocusAndMetering()
+            video.holdFocus(success);message=if(success) "Focus held. Auto releases it." else "Focus hold was not confirmed."
+        }.onFailure { video.holdFocus(false);current.cameraControl.cancelFocusAndMetering();message="Focus hold unavailable; Auto restored." } },androidx.core.content.ContextCompat.getMainExecutor(getApplication()))
     }
     fun grid(value: Boolean) { grid = value; prefs.edit { putBoolean("grid", value) } }
     fun timer(value: Int) { require(value in listOf(0,3,10)); timer = value; prefs.edit { putInt("timer", value) } }

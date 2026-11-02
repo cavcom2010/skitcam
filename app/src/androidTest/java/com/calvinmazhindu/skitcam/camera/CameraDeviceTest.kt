@@ -38,15 +38,29 @@ class CameraDeviceTest {
     private fun await(label: String, block: () -> Boolean) {
         val deadline=System.nanoTime()+45_000_000_000L
         while(!block() && System.nanoTime()<deadline) Thread.sleep(100)
+        if(!block()) {
+            layout("failure-${label.replace(' ','-')}")
+            val root=inst.uiAutomation.rootInActiveWindow
+            fun describe(node: android.view.accessibility.AccessibilityNodeInfo,depth: Int): String {
+                val bounds=android.graphics.Rect();node.getBoundsInScreen(bounds)
+                return " ".repeat(depth)+"${node.packageName} ${node.text} ${node.contentDescription} visible=${node.isVisibleToUser} $bounds\n"+
+                    (0 until node.childCount).mapNotNull { node.getChild(it) }.joinToString("") { describe(it,depth+1) }
+            }
+            File(context.filesDir,"validation-m8/failure-tree.txt").writeText(root?.let { describe(it,0) } ?: "no active window")
+        }
         assertTrue("$label: ${camera.message}; ${activity.photoModel.message}; ${activity.recordingModel.snapshots.value}",block())
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m8validation")) { "Use the isolated Milestone 8 validation application." }
+        check(context.packageName.endsWith(".m8validation") || context.packageName.endsWith(".m9validation")) { "Use the isolated Milestone 8 validation application." }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation"); shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity=it; camera=it.cameraModel; it.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
         await("recovery") { camera.ready && activity.recordingModel.recovered.value && activity.photoModel.recovered }
+        if(context.packageName.endsWith(".m9validation") && activity.recordingModel.snapshots.value.state==RecordingState.Error && !activity.recordingModel.snapshots.value.unresolved) {
+            activity.recordingModel.stop()
+            await("close settled validation failure") { activity.recordingModel.snapshots.value.state==RecordingState.Completed }
+        }
         inst.runOnMainSync { ExportJournal.status.value?.takeIf { !it.active }?.let { camera.acknowledge(it.sessionId) } }
         await("streaming") { camera.streaming }
     }
@@ -54,7 +68,7 @@ class CameraDeviceTest {
         if(::scenario.isInitialized) {
             if(InstrumentationRegistry.getArguments().getString("leavePhoto") != "true" && !activity.recordingModel.snapshots.value.openSession && !activity.photoModel.busy && camera.streaming) {
                 inst.runOnMainSync { camera.select(CameraMode.SkitVideo,CameraLens.Rear,true) }
-                await("video restored") { camera.streaming && camera.choice == CameraChoice() }
+                await("video restored") { camera.streaming && !camera.switching && camera.choice == CameraChoice() }
             }
             scenario.close()
         }

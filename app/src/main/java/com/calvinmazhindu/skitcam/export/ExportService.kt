@@ -61,12 +61,14 @@ class ExportService : Service() {
                 val source=java.io.File(segment.path).canonicalFile
                 require(source.parentFile==sessionRoot && source.name.matches(Regex("segment_[0-9]+\\.mp4"))) { "Segment ${segment.order}: invalid source path." }
             }
+            val outputProfile=if(job.getInt("version")>=2 && !job.isNull("exportProfile")) com.calvinmazhindu.skitcam.video.VideoJson.profile(job.getJSONObject("exportProfile")) else null
+            require(job.getInt("version")==1 || outputProfile==session.captureProfile) { "Export profile changed." }
             val spec=if(job.has("spec")) {
                 val a=job.getJSONArray("spec")
                 ExportSpec(id,session.orientationDegrees,List(a.length()) { index -> a.getJSONObject(index).let {
                     ExportClip(it.getString("id"),it.getString("path"),com.calvinmazhindu.skitcam.trim.TrimRange(it.getLong("duration"),it.getLong("start"),it.getLong("end")))
-                } })
-            } else ExportSpec.from(session) { inspect(File(it.path)).duration }
+                } },outputProfile)
+            } else ExportSpec.from(session) { inspect(File(it.path)).duration }.copy(captureProfile=outputProfile)
             require(spec.clips.map { it.id }==session.playbackOrder && spec.clips.all { clip ->
                 clip.range.valid() && session.segments.any { it.id==clip.id && it.path==clip.path }
             }) { "Saved export specification is invalid." }
@@ -85,8 +87,9 @@ class ExportService : Service() {
                 spec.clips.forEachIndexed { index, clip ->
                     check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source segment changed. Export not started." }
                 }
-                val bytes=Math.multiplyExact(spec.durationMs,1032L) // Two copies at ~4.1 Mb/s, plus reserve.
-                check(directory.usableSpace>Math.addExact(bytes,100L*1024*1024)) { "Insufficient space for finishing and gallery copy." }
+                val required=outputProfile?.takeUnless { it.legacy }?.let { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.reserveBytes(spec.durationMs,it.width,it.height,it.settings.fps) }
+                    ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
+                check(directory.usableSpace>required) { "Insufficient space for finishing and gallery copy." }
                 check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
                 ExportJournal.update(this,id,ExportState.Exporting)
                 val cameraDeadline=System.nanoTime()+10_000_000_000L
@@ -99,6 +102,12 @@ class ExportService : Service() {
                     if(current?.sessionId==id && current.state==ExportState.Exporting) ExportJournal.status.value=current.copy(message=percent?.let { "Encoding · $it%" } ?: "Encoding video")
                 }
                 ExportJournal.update(this,id,ExportState.Verifying)
+                outputProfile?.takeUnless { it.legacy }?.let { profile ->
+                    val geometry=inspect(candidate)
+                    require(maxOf(geometry.width,geometry.height)==maxOf(profile.width,profile.height) && minOf(geometry.width,geometry.height)==minOf(profile.width,profile.height)) { "Export resolution does not match the saved profile." }
+                    val sourceDisplay=inspect(File(spec.clips.first().path))
+                    require(geometry.width==sourceDisplay.width && geometry.height==sourceDisplay.height) { "Export display orientation does not match the source session." }
+                }
                 val report=verify(candidate,spec.durationMs) { timing ->
                     val checkpoint=ExportJournal.read(this,id)!!
                     checkpoint.put("timingDiagnostic",timing)
