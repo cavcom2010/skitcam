@@ -51,13 +51,13 @@ class CameraDeviceTest {
         assertTrue("$label: ${camera.message}; ${activity.photoModel.message}; ${activity.recordingModel.snapshots.value}",block())
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m8validation") || (context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation"))) { "Use the isolated Milestone 8 validation application." }
+        check(context.packageName.endsWith(".m8validation") || (context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || context.packageName.endsWith(".framingvalidation")))) { "Use the isolated Milestone 8 validation application." }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation"); shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity=it; camera=it.cameraModel; it.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
         await("recovery") { camera.ready && activity.recordingModel.recovered.value && activity.photoModel.recovered }
-        if((context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation")) && activity.recordingModel.snapshots.value.state==RecordingState.Error && !activity.recordingModel.snapshots.value.unresolved) {
+        if((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || context.packageName.endsWith(".framingvalidation"))) && activity.recordingModel.snapshots.value.state==RecordingState.Error && !activity.recordingModel.snapshots.value.unresolved) {
             activity.recordingModel.stop()
             await("close settled validation failure") { activity.recordingModel.snapshots.value.state==RecordingState.Completed }
         }

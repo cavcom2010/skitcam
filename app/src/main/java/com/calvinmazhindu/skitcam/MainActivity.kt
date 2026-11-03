@@ -256,9 +256,9 @@ private fun MainActivity.CameraScreen() {
         if(!recovered || !camera.ready || !photos.recovered) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
-            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().then(if(photo) Modifier.padding(
+            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
                 top=with(density) { headerHeight.toDp() },bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp() },
-                end=if(landscape) dockWidth else 0.dp) else Modifier))
+                end=if(landscape) dockWidth else 0.dp))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(

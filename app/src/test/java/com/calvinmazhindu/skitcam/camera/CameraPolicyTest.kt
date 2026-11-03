@@ -7,6 +7,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CameraPolicyTest {
+    @Test fun startupAndModeOrLensChangesResetZoom() {
+        val video=CameraChoice();val photo=video.copy(mode=CameraMode.Photo)
+        assertEquals(1f,CameraPolicy.zoomForBinding(null,video,4f),0f)
+        assertEquals(1f,CameraPolicy.zoomForBinding(photo,video,4f),0f)
+        assertEquals(1f,CameraPolicy.zoomForBinding(video,video.copy(lens=CameraLens.Front),4f),0f)
+    }
+    @Test fun sameChoiceRebindPreservesDeliberateZoom() {
+        val video=CameraChoice()
+        assertEquals(2.5f,CameraPolicy.zoomForBinding(video,video,2.5f),0f)
+        assertEquals(1f,CameraPolicy.zoomForBinding(video,video,Float.NaN),0f)
+    }
     @Test fun firstLaunchDefaultsToRearSkitVideo() { assertEquals(CameraChoice(CameraMode.SkitVideo,CameraLens.Rear),CameraChoice()) }
     @Test fun idleRestoresPhotoAndLensPreference() {
         val saved=CameraChoice(CameraMode.Photo,CameraLens.Front)

@@ -7,6 +7,7 @@ import androidx.core.content.edit
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.*
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.Observer
 import androidx.lifecycle.viewModelScope
 import com.calvinmazhindu.skitcam.recording.CameraLens
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class CameraModel(application: Application) : AndroidViewModel(application) {
+    val framing = FramingDiagnostics()
     val video = com.calvinmazhindu.skitcam.video.VideoController(application)
     private val preferenceWrites = Mutex()
     private val prefs = application.getSharedPreferences("camera_preferences", 0)
@@ -36,6 +38,14 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     var latestType by mutableStateOf("image/jpeg"); private set
     private var latestTime = 0L
     var zoom by mutableFloatStateOf(1f); private set
+    var zoomReady by mutableStateOf(false); private set
+    var videoAspect by mutableStateOf<Float?>(null); private set
+    private var zoomChoice: CameraChoice? = null
+    private var requestedZoom = 1f
+    private var zoomToken = 0
+    private val zoomObserver = Observer<ZoomState> { state ->
+        zoom=state.zoomRatio;minZoom=state.minZoomRatio;maxZoom=state.maxZoomRatio
+    }
     var minZoom by mutableFloatStateOf(1f); private set
     var maxZoom by mutableFloatStateOf(1f); private set
     var exposure by mutableIntStateOf(0); private set
@@ -64,7 +74,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         }
         loaded = true
     } }
-    override fun onCleared() { video.close();super.onCleared() }
+    override fun onCleared() { camera?.cameraInfo?.zoomState?.removeObserver(zoomObserver);video.close();super.onCleared() }
     fun initialize(snapshot: com.calvinmazhindu.skitcam.recording.RecordingSnapshot, needsExport: Boolean) {
         if (initialized || !loaded) return
         choice = CameraPolicy.initial(committed, snapshot, needsExport)
@@ -81,11 +91,21 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (next == choice) return
         switching = true; streaming = false; message = null; choice = next
     }
-    fun bound(value: Camera, size: String, info: BoundCameraInfo? = null) {
+    fun bound(value: Camera, size: String, info: BoundCameraInfo? = null, rotation: Int = 0,
+        onZoomApplied: (String?) -> Unit = {}) {
+        camera?.cameraInfo?.zoomState?.removeObserver(zoomObserver)
         camera = value; generation++; resolution = size; boundInfo=info
+        videoAspect=info?.takeUnless { it.photo }?.let { ViewfinderGeometry.aspect(it.width,it.height,rotation) }
         val state = value.cameraInfo.zoomState.value
         minZoom = state?.minZoomRatio ?: 1f; maxZoom = state?.maxZoomRatio ?: 1f
-        zoom = state?.zoomRatio ?: 1f
+        requestedZoom=CameraPolicy.zoom(CameraPolicy.zoomForBinding(zoomChoice,choice,requestedZoom),minZoom,maxZoom)
+        zoomChoice=choice
+        zoomReady=false
+        value.cameraInfo.zoomState.observeForever(zoomObserver)
+        requestZoom(requestedZoom) { failure ->
+            zoomReady=failure==null
+            onZoomApplied(failure)
+        }
         val ev = value.cameraInfo.exposureState
         exposureRange = ev.exposureCompensationRange.let { it.lower..it.upper }
         exposureStep = ev.exposureCompensationStep.toFloat(); exposure = ev.exposureCompensationIndex
@@ -107,17 +127,30 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (switching) { choice = committed; switching = false }
     }
     fun idle() { streaming = false; focusToken++; focus = null }
-    fun released() { video.release(); boundInfo=null; lastMeteringPoint=null; camera = null; generation++; streaming = false; focus = null }
+    fun released() {
+        camera?.cameraInfo?.zoomState?.removeObserver(zoomObserver)
+        framing.release();video.release();boundInfo=null;videoAspect=null;zoomReady=false
+        lastMeteringPoint=null;camera=null;generation++;zoomToken++;streaming=false;focus=null
+    }
     val observedZoom get() = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
     fun adjustZoom(ratio: Float) {
+        requestZoom(ratio)
+    }
+    private fun requestZoom(ratio: Float, onApplied: ((String?) -> Unit)? = null) {
         val current = camera ?: return
         val requested = CameraPolicy.zoom(ratio, minZoom, maxZoom)
-        zoom = requested
-        val token = generation
+        requestedZoom=requested
+        val binding = generation
+        val token = ++zoomToken
         val future = current.cameraControl.setZoomRatio(requested)
-        future.addListener({ if (generation == token) runCatching { future.get() }.onFailure {
-            zoom = current.cameraInfo.zoomState.value?.zoomRatio ?: 1f
-            message = "Zoom adjustment unavailable."
+        future.addListener({ if (generation == binding && zoomToken==token) {
+            val failure=runCatching { future.get() }.exceptionOrNull()
+            zoom=current.cameraInfo.zoomState.value?.zoomRatio ?: 1f
+            if(failure!=null) {
+                requestedZoom=zoom
+                message="Zoom adjustment unavailable. Actual zoom: ${zoom}×."
+            }
+            onApplied?.invoke(if(failure==null) null else message)
         } }, androidx.core.content.ContextCompat.getMainExecutor(getApplication()))
     }
     fun adjustExposure(index: Int) {

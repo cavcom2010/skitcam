@@ -52,7 +52,7 @@ class CameraUxDeviceTest {
         assertTrue("$label clickable",node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m10validation")) { "Use the isolated M10 app" }
+        check((context.packageName.endsWith(".m10validation") || context.packageName.endsWith(".framingvalidation"))) { "Use the isolated M10 app" }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)
@@ -123,7 +123,7 @@ class CameraUxDeviceTest {
     @Test fun c_pausedSettingsKeepCameraBoundAndProfileLocked() {
         record();model.pause();await("paused") { model.snapshots.value.state==RecordingState.Paused }
         val profile=model.snapshots.value.session!!.captureProfile
-        click("Settings");assertNotNull(find("Settings"));assertFalse(camera.video.canEdit())
+        click("Settings");await("settings panel shown") { find("Settings")!=null && find("Close")!=null };assertFalse(camera.video.canEdit())
         assertTrue("Settings does not unbind preview",camera.streaming && model.cameraReady)
         click("Close")
         assertEquals(profile,model.snapshots.value.session!!.captureProfile)

@@ -1,6 +1,9 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Version **0.10.1** corrects video viewfinder cropping on both cameras and explicitly
+applies the default 1.0× zoom on mode/lens changes. See
+[VALIDATION_VIDEO_FRAMING.md](VALIDATION_VIDEO_FRAMING.md) for preview-versus-MP4 evidence.
 Milestone 10 streamlines the viewfinder, settings and microphone information. After
 a verified STOP/export it returns automatically to the camera, with a brief
 **Video saved · View** message and an updated recent-media shortcut. See
@@ -343,8 +346,13 @@ explicitly if more than one is attached:
 Allow camera access at first launch. Denial shows a retry or app-settings action;
 returning from settings checks permission again. Preview follows the activity
 lifecycle, releases its use case on disposal, and reports camera startup errors.
-Both rear and front cameras are supported. Video preview fills by center cropping;
-Photo uses a fitted capture viewport. Saved media keeps its independent orientation.
+Both rear and front cameras are supported. Video requests a preview aspect matching
+the CameraX video profile, then fits the actual capture frame between the controls
+without stretching or full-screen center cropping. Photo keeps its fitted 4:3
+capture viewport. Normal 4:3/16:9 sensor and stabilisation differences remain;
+front preview is mirrored while saved video is unmirrored. Saved media keeps its
+independent orientation. Startup and mode/lens changes explicitly apply 1.0× zoom;
+deliberate user zoom survives same-choice rebinding and PAUSE/RESUME.
 
 ## Files and recovery
 

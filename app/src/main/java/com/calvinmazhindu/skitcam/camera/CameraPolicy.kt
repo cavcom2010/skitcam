@@ -7,6 +7,8 @@ data class CameraChoice(val mode: CameraMode = CameraMode.SkitVideo, val lens: C
 
 /** Recovery always wins over preferences; no command in this policy stops a session. */
 object CameraPolicy {
+    fun zoomForBinding(previous: CameraChoice?, next: CameraChoice, requested: Float): Float =
+        if(previous==next && requested.isFinite() && requested>0) requested else 1f
     fun maySwitch(recovered: Boolean, snapshot: RecordingSnapshot, exporting: Boolean, photoBusy: Boolean): Boolean =
         recovered && !snapshot.openSession && !snapshot.unresolved &&
             snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !exporting && !photoBusy

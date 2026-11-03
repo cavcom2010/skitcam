@@ -13,10 +13,10 @@ android {
         applicationId = "com.calvinmazhindu.skitcam" + providers.gradleProperty("validationSuffix").getOrElse("")
         minSdk = 26
         targetSdk = 36
-        manifestPlaceholders["appLabel"] = if (providers.gradleProperty("validationSuffix").isPresent) "SkitCam M10 validation" else "@string/app_name"
+        manifestPlaceholders["appLabel"] = if (providers.gradleProperty("validationSuffix").isPresent) "SkitCam validation" else "@string/app_name"
         manifestPlaceholders["launcherCategory"] = if (providers.gradleProperty("validationSuffix").isPresent) "android.intent.category.DEFAULT" else "android.intent.category.LAUNCHER"
-        versionCode = 11
-        versionName = "0.10.0"
+        versionCode = 12
+        versionName = "0.10.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {
