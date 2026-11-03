@@ -6,6 +6,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.material3.IconButton
@@ -22,12 +25,25 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+private val thumbnailPermits = Semaphore(2)
 
 @Composable
 fun MediaShortcut(uri: String?, type: String, enabled: Boolean, onOpen: () -> Unit) {
+    IconButton(onClick=onOpen,enabled=enabled,modifier=Modifier.size(48.dp)
+        .semantics { contentDescription="Open saved media gallery" }) {
+        SavedMediaThumbnail(uri,type,Modifier.size(48.dp))
+    }
+}
+
+@Composable
+fun SavedMediaThumbnail(uri: String?, type: String, modifier: Modifier=Modifier) {
     val context=LocalContext.current
-    val bitmap by produceState<Bitmap?>(null,uri) {
-        value = withContext(Dispatchers.IO) { runCatching {
+    val bitmap by produceState<Bitmap?>(null,uri,type) {
+        value=null
+        value = withContext(Dispatchers.IO) { thumbnailPermits.withPermit { runCatching {
             if(uri==null) null
             else if(Build.VERSION.SDK_INT>=29) context.contentResolver.loadThumbnail(uri.toUri(),android.util.Size(96,96),null)
             else if(type.startsWith("image/")) context.contentResolver.openFileDescriptor(uri.toUri(),"r")?.use { descriptor ->
@@ -37,13 +53,12 @@ fun MediaShortcut(uri: String?, type: String, enabled: Boolean, onOpen: () -> Un
                 while(maxOf(bounds.outWidth,bounds.outHeight)/sample>128) sample*=2
                 BitmapFactory.decodeFileDescriptor(descriptor.fileDescriptor,null,BitmapFactory.Options().apply { inSampleSize=sample })
             } else null
-        }.getOrNull() }
+        }.getOrNull() } }
     }
-    IconButton(onClick=onOpen,enabled=enabled,modifier=Modifier.size(48.dp)
-        .semantics { contentDescription="Open latest saved media" }) {
-        if(bitmap!=null) Image(bitmap!!.asImageBitmap(),contentDescription=null,modifier=Modifier.size(48.dp),contentScale=ContentScale.Crop)
+    Box(modifier,contentAlignment=androidx.compose.ui.Alignment.Center) {
+        if(bitmap!=null) Image(bitmap!!.asImageBitmap(),contentDescription=null,modifier=Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).border(1.dp,Color.White.copy(alpha=.6f),RoundedCornerShape(8.dp)),contentScale=ContentScale.Crop)
         else Canvas(Modifier.size(28.dp)) {
-            val color=if(enabled) Color.White else Color.Gray
+            val color=Color.LightGray
             drawRoundRect(color,topLeft=Offset(1.dp.toPx(),3.dp.toPx()),size=Size(26.dp.toPx(),22.dp.toPx()),cornerRadius=CornerRadius(3.dp.toPx()),style=Stroke(2.dp.toPx()))
             drawCircle(color,2.dp.toPx(),Offset(19.dp.toPx(),9.dp.toPx()))
             drawLine(color,Offset(4.dp.toPx(),21.dp.toPx()),Offset(11.dp.toPx(),13.dp.toPx()),2.dp.toPx())

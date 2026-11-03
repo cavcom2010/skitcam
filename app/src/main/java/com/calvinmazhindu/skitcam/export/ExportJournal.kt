@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AtomicFile
 import com.calvinmazhindu.skitcam.recording.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -11,7 +12,11 @@ import java.util.UUID
 /** One atomic sidecar per session. Recording metadata and source MP4s are never rewritten here. */
 object ExportJournal {
     val status = MutableStateFlow<ExportStatus?>(null)
-    @Volatile var busy = false
+    private val executing = MutableStateFlow(false)
+    val busyState = executing.asStateFlow()
+    var busy: Boolean
+        get() = executing.value
+        set(value) { executing.value=value }
     @Volatile var cancelRequested = false
     fun directory(context: Context, id: String): File {
         require(id.matches(Regex("[a-zA-Z0-9-]+")))

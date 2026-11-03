@@ -135,7 +135,7 @@ class AudioMonitor(private val context: Context, private val onInputChange: (Str
                 AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> InputKind.Bluetooth
                 else -> if(Build.VERSION.SDK_INT >= 31 && device.type == AudioDeviceInfo.TYPE_BLE_HEADSET) InputKind.Bluetooth else InputKind.Other
             }
-            return AudioInput(device.id, kind, device.productName.toString().ifBlank { "${kind.name} input" })
+            return AudioInput(device.id, kind, device.productName.toString().ifBlank { "${kind.name} input" },device.type,if(Build.VERSION.SDK_INT>=28) device.address else null)
         }
     }
 }

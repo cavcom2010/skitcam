@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
         )
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFB96969))) {
+            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFDAA0A4), secondaryContainer=Color(0xFF423139), onSecondaryContainer=Color(0xFFFFE6E8))) {
                 Surface(color=Color(0xFF101014),contentColor=Color.White) { CameraScreen() }
             }
         }
@@ -103,41 +103,78 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MainActivity.CameraScreen() {
+    val density = LocalDensity.current
+    val dockWidth = if(density.fontScale>1.5f) 192.dp else 152.dp
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
     val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
     val review = reviewController
     val arrangement = arrangementModel
     val export by ExportJournal.status.collectAsStateWithLifecycle()
+    val exportBusy by ExportJournal.busyState.collectAsStateWithLifecycle()
+    val cameraReady by recordingModel.cameraAvailability.collectAsStateWithLifecycle()
+    val snackbars = remember { SnackbarHostState() }
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
     val camera = cameraModel
     camera.video.canEdit = { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.canChange(recordingModel.snapshots.value,recordingModel.commandPending.value,ExportJournal.busy) && recordingModel.recovered.value && camera.choice.mode==CameraMode.SkitVideo && camera.streaming && !camera.switching && !photoModel.busy }
     camera.video.beforeChange = { recordingModel.cameraReady = false }
     val photos = photoModel
-    val finishing = camera.loaded && export?.sessionId == snapshot.session?.id && export != null && camera.acknowledgedExport != export?.sessionId
+    val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
+    val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
+    val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
+    val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
+        snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed,RecordingState.Paused)
     LaunchedEffect(camera.loaded, recovered) {
         if(camera.loaded && recovered) {
             // UI collectors can resume in different orders. Read the completed recovery directly.
             val current = recordingModel.snapshots.value
             val result = ExportJournal.status.value
-            camera.initialize(current,result!=null && result.sessionId==current.session?.id && camera.acknowledgedExport!=result.sessionId)
+            camera.initialize(current,result!=null && result.sessionId==current.session?.id && !camera.exportHandled(result.sessionId))
         }
     }
     LaunchedEffect(camera.loaded,photos.lastUri) { if(camera.loaded) photos.lastUri?.let { camera.media(it,"image/jpeg",photos.savedAt) } }
-    LaunchedEffect(camera.loaded,export?.uri, export?.state) {
-        val result = export
-        if(camera.loaded && result?.state == ExportState.Completed && result.uri != null) {
-            val time = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching { ExportJournal.read(this@CameraScreen,result.sessionId)?.getLong("createdAt") }.getOrNull()
+    LaunchedEffect(camera.loaded,recovered,export,exportBusy,snapshot.session?.id,snapshot.state,snapshot.unresolved) {
+        val result=export
+        if(camera.loaded && recovered && SaveReturnPolicy.eligible(snapshot,result,exportBusy)) {
+            val completed=result!!
+            val video=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val job=ExportJournal.read(this@CameraScreen,completed.sessionId) ?: error("Missing export record")
+                    check(job.getString("state")==ExportState.Completed.name && job.getString("uri")==completed.uri)
+                    SavedVideo(completed.sessionId,job.getString("id"),completed.uri!!,job.getLong("createdAt"))
+                        .also { check(it.valid()) }
+                }.getOrNull()
             }
-            if(time != null) camera.media(result.uri.toUri(),"video/mp4",time)
+            // IO may outlive a state change. A stale result cannot select media or navigate.
+            if(ExportJournal.status.value==completed && recordingModel.snapshots.value.session?.id==completed.sessionId &&
+                SaveReturnPolicy.eligible(recordingModel.snapshots.value,completed,ExportJournal.busy)) {
+                if(video!=null) camera.published(video,recordingModel.snapshots.value.session!!.lens)
+                else camera.message="Saved video details are unavailable. Original recordings are preserved."
+            }
         }
+    }
+    LaunchedEffect(camera.receipt,cameraReady,camera.streaming,exportBusy) {
+        if(cameraReady && camera.streaming && !exportBusy && camera.receipt?.video?.sessionId==snapshot.session?.id && !snapshot.openSession)
+            camera.cameraReturned()
+    }
+    LaunchedEffect(camera.savedNotice) {
+        val notice=camera.savedNotice ?: return@LaunchedEffect
+        val action=snackbars.showSnackbar("Video saved",actionLabel="View",withDismissAction=true,duration=SnackbarDuration.Short)
+        camera.dismissSavedNotice()
+        if(action==SnackbarResult.ActionPerformed && !recordingModel.snapshots.value.openSession &&
+            !recordingModel.commandPending.value && !ExportJournal.busy && !photoModel.busy)
+            startActivity(Intent(this@CameraScreen,FinishedPlaybackActivity::class.java).setData(notice.uri.toUri()))
+    }
+    var seenPhotoSave by remember { mutableIntStateOf(photos.saveCount) }
+    LaunchedEffect(photos.saveCount) {
+        if(photos.saveCount>seenPhotoSave) { seenPhotoSave=photos.saveCount;snackbars.showSnackbar("Photo saved",duration=SnackbarDuration.Short) }
     }
     val photo = camera.choice.mode == CameraMode.Photo
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
+    val recentEnabled = camera.ready && recovered && photos.recovered && !snapshot.openSession && !snapshot.unresolved && !finishing && !ExportJournal.busy && !photos.busy && !commandPending && !camera.switching && !camera.video.pending
     fun selectCamera(mode: CameraMode = camera.choice.mode, lens: CameraLens? = null) {
         val old = camera.choice
         camera.select(mode,lens,switchAllowed())
@@ -161,19 +198,15 @@ private fun MainActivity.CameraScreen() {
         photos.take(camera.timer,rotation)
     }
     fun openMedia() {
-        val uri = camera.latestUri ?: return
-        try {
-            contentResolver.openInputStream(uri.toUri())!!.use { check(it.read() >= 0) }
-            if(camera.latestType == "video/mp4") startActivity(Intent(this,FinishedPlaybackActivity::class.java).setData(uri.toUri()))
-            else startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri.toUri(),camera.latestType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
-        } catch(_: Exception) { camera.message = "Saved media is unavailable, or no compatible viewer is installed." }
+        if(!CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
+                ExportJournal.busy,photoModel.busy || recordingModel.commandPending.value || camera.video.pending) || camera.switching) return
+        startActivity(Intent(this@CameraScreen,com.calvinmazhindu.skitcam.gallery.SavedMediaActivity::class.java))
     }
     val trimming = trimModel.segment != null
     val arranging = arrangement.draft != null || trimming || finishing
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
-    val density = LocalDensity.current
     LaunchedEffect(snapshot.state, snapshot.session?.id) {
         if (snapshot.state != RecordingState.Paused || trimModel.sessionId?.let { it != snapshot.session?.id } == true) trimModel.close()
         if (snapshot.state != RecordingState.Paused ||
@@ -223,7 +256,9 @@ private fun MainActivity.CameraScreen() {
         if(!recovered || !camera.ready || !photos.recovered) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
-            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().then(if(photo && landscape) Modifier.padding(end=280.dp) else Modifier))
+            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().then(if(photo) Modifier.padding(
+                top=with(density) { headerHeight.toDp() },bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp() },
+                end=if(landscape) dockWidth else 0.dp) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -243,14 +278,19 @@ private fun MainActivity.CameraScreen() {
         }
         if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
             .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
-            Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) 288.dp else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
+            Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) (dockWidth+8.dp) else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
                 horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-                TextButton(onClick={settings=true;quick=false},enabled=maySwitch) { Text("Settings") }
-                Text("${if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else "Front camera"} · ${camera.resolution}",style=MaterialTheme.typography.labelSmall,modifier=Modifier.weight(1f))
-                TextButton(onClick={quick=!quick},enabled=adjustments) { Text("Quick") }
+                CameraIconButton(CameraIcon.Settings,"Settings",settingsAllowed) { settings=true;quick=false }
+                val boundLabel=if(camera.streaming) camera.boundInfo?.concise ?: "Camera unavailable" else "Opening camera…"
+                val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else "Front camera"
+                Text(boundLabel,
+                    style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).semantics { contentDescription="$lensLabel · $boundLabel" },maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                if(!photo && !arranging && review.selection==null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio)
+                CameraIconButton(CameraIcon.Quick,"Quick settings",adjustments) { quick=!quick }
+
             }
-            if(!photo && !arranging && review.selection==null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio,
-                Modifier.padding(start=8.dp,end=if(landscape) 280.dp else 8.dp))
+            if(!photo && !arranging) com.calvinmazhindu.skitcam.audio.AudioWarning(recordingModel.audio,
+                Modifier.padding(start=16.dp,end=if(landscape) (dockWidth+8.dp) else 16.dp))
         }
         if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
@@ -258,16 +298,16 @@ private fun MainActivity.CameraScreen() {
             PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
                 onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = Modifier.fillMaxSize()
                     .padding(top = top, bottom = if (landscape) 0.dp else bottom,
-                        end = if (landscape) 280.dp else 0.dp)
+                        end = if (landscape) dockWidth else 0.dp)
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(
                         if (landscape) WindowInsetsSides.Start + WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal))
                     .padding(8.dp))
         }
         Column(
-            (if (landscape) Modifier.align(Alignment.CenterEnd).width(280.dp).fillMaxHeight()
+            (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
-                .then(if (arranging) Modifier.clearAndSetSemantics {} else Modifier)
+                .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -278,43 +318,40 @@ private fun MainActivity.CameraScreen() {
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
             if(camera.ready && recovered && !finishing) {
-                if(!snapshot.openSession) {
+                if(!snapshot.openSession && !landscape) {
                     @Composable fun ModeChip(mode: CameraMode, label: String, modifier: Modifier = Modifier) {
                         FilterChip(selected=camera.choice.mode==mode,onClick={photos.cancelTimer();selectCamera(mode=mode)},
                             enabled=maySwitch && !camera.switching,label={Text(label)},modifier=modifier)
                     }
-                    if(landscape) Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally) {
-                        ModeChip(CameraMode.Photo,"Photo",Modifier.fillMaxWidth())
-                        ModeChip(CameraMode.SkitVideo,"Skit Video",Modifier.fillMaxWidth())
-                    } else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         ModeChip(CameraMode.Photo,"Photo")
                         ModeChip(CameraMode.SkitVideo,"Skit Video")
                     }
                 }
                 if(photo) Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                     horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) {
-                        MediaShortcut(camera.latestUri,camera.latestType,camera.latestUri!=null && !photos.busy,::openMedia)
+                    @Composable fun PhotoShutter() {
                         Button(onClick=::takePhoto,enabled=granted && maySwitch && !camera.switching,shape=CircleShape,
                             colors=ButtonDefaults.buttonColors(containerColor=Color.Transparent,contentColor=Color.White),contentPadding=PaddingValues(0.dp),modifier=Modifier.size(80.dp)
                                 .semantics { contentDescription="Take photo" }) { androidx.compose.foundation.Canvas(Modifier.size(76.dp)) { drawCircle(Color.White,radius=size.minDimension/2-2.dp.toPx(),style=androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()));drawCircle(Color.White,radius=size.minDimension/2-8.dp.toPx()) } }
-                        LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) {
-                            selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear)
-                        }
                     }
+                    @Composable fun PhotoRecent() { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) }
+                    @Composable fun PhotoLens() { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } }
+                    if(landscape) {
+                        PhotoRecent();PhotoShutter();PhotoLens()
+                    } else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
                     if(photos.countdown>0) Text("${photos.countdown} · Cancel",modifier=Modifier.semantics { contentDescription="Photo countdown ${photos.countdown}" })
                     if(photos.countdown>0) TextButton(onClick=photos::cancelTimer) { Text("Cancel timer") }
-                    photos.message?.let { Text(it,style=MaterialTheme.typography.labelMedium) }
+                    if(photos.canRetry) Text("Photo awaiting save",style=MaterialTheme.typography.labelSmall)
+                    else if(!photos.lastSaveSucceeded) photos.message?.let { Text(it,style=MaterialTheme.typography.labelSmall) }
+                    if(photos.busy && photos.countdown==0) Text("Saving photo…",style=MaterialTheme.typography.labelSmall)
                     if(photos.canRetry) TextButton(onClick=photos::retry) { Text("Retry Save") }
                 } else {
-                    if(!snapshot.openSession) Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-                        MediaShortcut(camera.latestUri,camera.latestType,maySwitch && camera.latestUri!=null,::openMedia)
-                        LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) {
-                            selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear)
-                        }
-                    }
                     RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted && !camera.switching,
-                beforeRecording = { trimModel.close(); review.close(); arrangement.invalidate() },
+                showShortcuts = true, verticalShutter = landscape,
+                leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
+                trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
+                beforeRecording = { camera.dismissSavedNotice();trimModel.close();review.close();arrangement.invalidate() },
                 onBackground = { review.close() },
                 onArrange = {
                     val current = recordingModel.snapshots.value
@@ -329,14 +366,27 @@ private fun MainActivity.CameraScreen() {
             }
         }
         if(quick && !editors) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp)) {
-            CameraTools(camera,false,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession) { quick=false }
+            CameraTools(camera,false,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,onMore=if(settingsAllowed) {{quick=false;settings=true}} else null,audio=recordingModel.audio) { quick=false }
         }
-        if(settings && maySwitch) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession) { settings=false }
+        if(settings && settingsAllowed) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,audio=recordingModel.audio) { settings=false }
         if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
+        if(!snapshot.openSession && landscape && !finishing && !settings && !quick && camera.ready) Row(Modifier.align(Alignment.BottomStart)
+            .fillMaxWidth().padding(end=(dockWidth+8.dp)).safeDrawingPadding().padding(8.dp),horizontalArrangement=Arrangement.Center) {
+            listOf(CameraMode.Photo to "Photo",CameraMode.SkitVideo to "Skit Video").forEach { (mode,label) ->
+                FilterChip(selected=camera.choice.mode==mode,onClick={selectCamera(mode)},enabled=maySwitch,label={Text(label,maxLines=1)})
+                Spacer(Modifier.width(8.dp))
+            }
+        }
         if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
+        SnackbarHost(snackbars,Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(
+            end=if(landscape) dockWidth else 0.dp,
+            bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp()+8.dp })) { data ->
+            Snackbar(data,containerColor=Color(0xFF292429),contentColor=Color.White,
+                actionColor=Color(0xFFFFBDC3),dismissActionContentColor=Color.LightGray)
+        }
     }
 }
 
@@ -345,7 +395,7 @@ internal fun CameraMessage(message: String, action: String? = null, onAction: ()
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
     Box(Modifier.fillMaxSize().safeDrawingPadding().padding(
-        start = 32.dp, end = if (landscape) 280.dp else 32.dp,
+        start = 32.dp, end = if (landscape) (if(LocalDensity.current.fontScale>1.5f) 192.dp else 152.dp) else 32.dp,
         top = if (landscape) 88.dp else 150.dp, bottom = if (landscape) 32.dp else 150.dp),
         contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally,

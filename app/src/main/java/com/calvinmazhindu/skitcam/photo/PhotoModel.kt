@@ -24,6 +24,8 @@ class PhotoModel(application: Application) : AndroidViewModel(application) {
     val busy get() = runtime.busy || countdown > 0
     val message get() = runtime.message
     val lastUri get() = runtime.lastUri
+    val saveCount get() = runtime.saveCount
+    val lastSaveSucceeded get() = runtime.lastSaveSucceeded
     val savedAt get() = runtime.savedAt
     val canRetry get() = runtime.retry != null && !busy
     val recovered get() = runtime.recovered
@@ -33,7 +35,7 @@ class PhotoModel(application: Application) : AndroidViewModel(application) {
     fun take(seconds: Int, rotation: Int) {
         if(busy || !recovered) return
         val useCase = capture ?: return
-        runtime.message = null
+        runtime.message = null;runtime.lastSaveSucceeded=false
         timerJob = viewModelScope.launch {
             for (remaining in seconds downTo 1) { countdown = remaining; delay(1000) }
             countdown = 0
@@ -54,6 +56,8 @@ private class PhotoRuntime(app: Application) {
     var message by mutableStateOf<String?>(null)
     var retry: File? = null
     var lastUri by mutableStateOf<android.net.Uri?>(null)
+    var saveCount by mutableIntStateOf(0)
+    var lastSaveSucceeded by mutableStateOf(false)
     var savedAt = 0L
     init { worker.execute {
         val pending = store.recover()
@@ -62,7 +66,7 @@ private class PhotoRuntime(app: Application) {
     } }
     fun take(capture: ImageCapture, rotation: Int) {
         if(busy) return
-        busy = true
+        busy = true;lastSaveSucceeded=false
         worker.execute {
             try {
                 val dir = store.create()
@@ -85,13 +89,13 @@ private class PhotoRuntime(app: Application) {
     }
     fun save(dir: File, alreadyBusy: Boolean = false) {
         if(busy && !alreadyBusy) return
-        busy = true
+        busy = true;lastSaveSucceeded=false
         worker.execute {
             try {
                 val (uri,facts) = store.publish(dir)
                 val createdAt = store.read(dir).getLong("createdAt")
                 val pending = store.recover()
-                main.post { savedAt = createdAt; lastUri = uri; retry = pending; busy = false; message = "Photo saved · ${facts.width} × ${facts.height}" + if(pending!=null) ". Another retained photo needs Retry Save." else "" }
+                main.post { saveCount++;lastSaveSucceeded=true;savedAt = createdAt; lastUri = uri; retry = pending; busy = false; message = "Photo saved · ${facts.width} × ${facts.height}" + if(pending!=null) ". Another retained photo needs Retry Save." else "" }
             } catch(e: Exception) { main.post { retry = dir; busy = false; message = e.message ?: "Photo saving failed. Capture retained privately." } }
         }
     }

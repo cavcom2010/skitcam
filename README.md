@@ -1,6 +1,10 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Milestone 10 streamlines the viewfinder, settings and microphone information. After
+a verified STOP/export it returns automatically to the camera, with a brief
+**Video saved · View** message and an updated recent-media shortcut. See
+[VALIDATION_M10.md](VALIDATION_M10.md) for validation and remaining checks.
 Milestone 9 adds camera-specific video quality, FPS targets, session profile locking,
 confirmed AE/WB controls and optional electronic stabilisation. See
 [VALIDATION_M9.md](VALIDATION_M9.md) for measured output and remaining checks.
@@ -12,16 +16,44 @@ and safe pauses on external-input loss. Milestone 6 provides automatic MP4 finis
 Keep/Discard, saved playback order and non-destructive trim boundaries. Original
 recordings and session metadata remain in app-specific storage.
 
-STOP finalises the active segment, then opens a finishing screen. A verified video
-is saved in **Movies/SkitCam**, with **Play**, **Share** and **New Recording** actions.
-Failures offer Retry and retain the recording session. Finishing uses one foreground
+STOP finalises the active segment, then shows a minimal finishing view while the
+existing pipeline assembles, verifies and publishes to **Movies/SkitCam**. Success
+returns automatically to the live **Skit Video** camera. A brief **Video saved**
+message offers **View** for that video; the recent-media thumbnail opens **Gallery**,
+where older saved videos/photos can be browsed and selected for playback and Share. The next START creates a different session ID; the completed
+session, original files, edits and export record remain intact. Failures/cancellation
+retain explicit Retry / New Recording recovery actions and never show false success. Finishing uses one foreground
 job at a time; Android may show a processing notification. No accounts, backend or
 network permission are required.
 
-The main workflow has passed on the Moto G54, including Play, the standard Share
-chooser and New Recording. Reordered non-keyframe trims also passed independent
+The recording/export workflow has been exercised on the Moto G54, including Play
+and the standard Share chooser. Reordered non-keyframe trims also passed independent
 scene/audio measurements. See [VALIDATION_M6.md](VALIDATION_M6.md) for actual test
 results, preservation evidence and remaining platform/stress checks.
+
+## Save return and recent media (0.10.0)
+
+A small versioned receipt in the existing camera preferences remembers the completed
+export job, session, published URI and whether its camera return was handled. This
+is UI state, separate from immutable session/export metadata. Duplicate completion
+callbacks cannot create a session or publish again. The camera is considered back
+only after CameraX is open, the preview is streaming and the video profile is ready.
+START still requires microphone permission and the existing valid orientation.
+
+An unseen publication recovered on startup opens Skit Video once. The saved ordinary
+mode preference is unchanged; a later ordinary launch can still restore Photo.
+An interrupted recording session always takes priority over that preference. The
+brief save message is best effort, rather than an exactly-once notification across
+process death. A committed return receipt prevents repeated automatic navigation;
+the published video remains accessible through its retained content URI and Gallery.
+
+The toolbar uses labelled-accessibility icons for Settings, microphone details and
+Quick settings. Idle duration/count clutter is hidden; recording and PAUSE retain
+their useful duration/count and explicit RESUME/STOP controls. Full settings are
+grouped into Camera, Photo, Video, Audio, Preferences and expandable Advanced
+information. The microphone summary groups built-in/other endpoint categories for
+presentation only, preserves every raw device ID/type in Diagnostics, and does not
+claim that a connected receiver is the confirmed recording input.
 
 ## Photo and camera controls
 
@@ -42,15 +74,21 @@ The **camera-switch icon** switches front/rear before recording or while Photo i
 preview is mirrored; saved photos and videos request unmirrored output. A video
 session locks its lens and orientation for all segments and recovery.
 
-Tap the unobstructed preview to focus. Pinch to zoom, or open **Quick** for a
+Tap the unobstructed preview to focus. Pinch to zoom, or open **Quick settings** for a
 precise zoom slider, a grid, supported exposure compensation and a Photo timer
 (Off / 3 / 10 seconds). Unsupported adjustments are hidden. Focus, zoom and
 exposure reset when changing cameras; grid and timer preferences persist.
 The timer cancels when the app leaves the foreground. **Settings** opens the full
-settings screen only while idle. Quick settings can close without stopping video.
+settings screen while idle or PAUSED, leaving the camera bound underneath. Capture
+profile controls remain locked during an unfinished session. Quick settings can
+close without stopping video; its scrollable panel uses less than half the display.
 
-The gallery thumbnail opens the latest accessible successfully published photo or
-video. Missing media and absent viewers show feedback. Photo publication uses
+The gallery thumbnail previews the most recent saved media and opens a **Gallery**
+list with **All / Videos / Photos** filters. Older finished videos and photos remain
+browsable; selecting a video opens Play/Share, and Back returns to Gallery. The
+list shows accessible SkitCam media from Movies/SkitCam and Pictures/SkitCam.
+**Browse phone** opens Android's picker for media from other apps or installations,
+without new broad media permissions. Missing media and absent viewers show feedback. Photo publication uses
 private staging, an atomic recovery journal, verified MediaStore copies and pending
 rows on Android 10+. Failed publication retains the private capture for **Retry
 Save**; interrupted captures are not mistaken for completed photos. Only a new
@@ -60,7 +98,9 @@ Original video segments and session metadata are never cleaned up automatically.
 Preview binds with ImageCapture in Photo and the existing Recorder in Skit Video.
 The app does not require all three use cases simultaneously. Camera adjustments
 never rebind an actively recording camera. Idle profile changes rebind safely. The video indicator shows bound resolution and
-**Auto FPS**, rather than claiming a measured capture frame rate.
+a short label such as **1080p · Auto** or **1080p · 30 target**, without claiming a
+measured capture frame rate. Detailed dimensions, cadence, codec and session facts
+remain in the expandable Advanced / Technical Information section.
 
 New session metadata is version **6**, retaining the v5 `lens` and adding an optional
 immutable `captureProfile` plus observed per-segment `media` facts. Versions 1–5
@@ -69,9 +109,9 @@ segment IDs, chronology, Keep status and playback order are unchanged. A normal
 subsequent user edit saves through the same atomic repository in the latest format.
 
 
-## Video capture settings (0.9.0)
+## Video capture settings
 
-Before START, open **Quick** or **Settings** to select a quality reported by the
+Before START, open **Quick settings** or **Settings** to select a quality reported by the
 active camera's CameraX SDR capabilities. The Moto G54 reports FHD/HD/SD; it does
 not expose UHD through this pipeline. Front/rear preferences are separate. A
 profile preference is committed only after binding, streaming and any requested
@@ -123,8 +163,8 @@ out of scope. The existing **100 ms** export timing gate is unchanged.
   segments stay in the history without using retained capacity.
 - **STOP** finalises an active segment and completes the session; while paused,
   it completes the session without creating another segment. Finishing begins
-  automatically. New Recording returns to the camera; START begins a separate
-  session and preserves all earlier files.
+  automatically. Verified publication returns to the camera automatically; the
+  next START begins a separate session and preserves all earlier files.
 
 Hold the phone upright and steady before START. The physical orientation must
 match the preview. UI and video orientation stay locked for the entire session;

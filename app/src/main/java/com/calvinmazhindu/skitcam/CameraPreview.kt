@@ -144,7 +144,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                 }
                 photos.capture = image
                 val resolution = if(photo) image?.resolutionInfo else videoCapture?.resolutionInfo
-                cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · ${cameraModel.video.settings.fps?.let { "$it fps target" } ?: "Auto FPS"}")
+                cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · ${cameraModel.video.settings.fps?.let { "$it fps target" } ?: "Auto FPS"}", resolution?.resolution?.let { BoundCameraInfo(it.width,it.height,photo,if(photo) null else cameraModel.video.settings.fps) })
                 info = camera.cameraInfo.cameraState.also { it.observe(lifecycleOwner,stateObserver) }
                 bound = true
                 view.previewStreamState.observe(lifecycleOwner,streamObserver)

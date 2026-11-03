@@ -2,7 +2,7 @@ package com.calvinmazhindu.skitcam.audio
 
 /** Device identity is valid only for this process/device connection. Never a saved preference. */
 enum class InputKind { BuiltIn, Usb, Wired, Bluetooth, Other }
-data class AudioInput(val id: Int, val kind: InputKind, val name: String)
+data class AudioInput(val id: Int, val kind: InputKind, val name: String, val androidType: Int?=null, val address: String?=null)
 enum class CaptureHealth { Idle, Active, Muted, Silenced, Failed, Unavailable }
 data class AudioObservation(val sessionId: Int, val device: AudioInput)
 data class AudioSnapshot(
@@ -38,4 +38,18 @@ object AudioPolicy {
     fun routeChanged(before: List<AudioObservation>, after: List<AudioObservation>): Boolean =
         before.any { old -> after.any { it.sessionId == old.sessionId && it.device.id != old.device.id } }
     fun captureFailure(health: CaptureHealth) = health in setOf(CaptureHealth.Muted, CaptureHealth.Silenced, CaptureHealth.Failed, CaptureHealth.Unavailable)
+}
+
+/** Display categories only. Endpoint identities remain intact for monitoring and diagnostics. */
+data class AudioGroup(val label: String, val endpoints: List<AudioInput>)
+object AudioPresentation {
+    fun groups(inputs: List<AudioInput>): List<AudioGroup> {
+        val result=mutableListOf<AudioGroup>()
+        inputs.filter { it.kind==InputKind.BuiltIn }.takeIf { it.isNotEmpty() }?.let { result+=AudioGroup("Phone microphone",it) }
+        inputs.filter { it.kind !in setOf(InputKind.BuiltIn,InputKind.Other) }.forEach { input ->
+            result+=AudioGroup("${input.name} · ${when(input.kind) { InputKind.Usb->"USB";InputKind.Wired->"Wired";else->"Bluetooth" }} · input ${input.id}",listOf(input))
+        }
+        inputs.filter { it.kind==InputKind.Other }.takeIf { it.isNotEmpty() }?.let { result+=AudioGroup("Other Android inputs",it) }
+        return result
+    }
 }

@@ -6,6 +6,8 @@ import android.content.*
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.activity.compose.setContent
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,7 +47,7 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
     Surface(Modifier.fillMaxSize(),color=Color(0xFF101014),contentColor=Color.White) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp,Alignment.CenterVertically),horizontalAlignment=Alignment.CenterHorizontally) {
             Text(when(status.state) {
-                ExportState.Completed -> "Video finished"
+                ExportState.Completed -> "Opening camera"
                 ExportState.Empty -> "No kept segments"
                 ExportState.Failed -> "Could not finish video"
                 ExportState.Cancelled -> "Finishing cancelled"
@@ -53,21 +55,12 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
                 ExportState.Exporting -> "Finishing video"
                 ExportState.Verifying -> "Checking video"
                 ExportState.Publishing -> "Saving to gallery"
-            },style=MaterialTheme.typography.headlineMedium)
+            },style=MaterialTheme.typography.titleLarge)
             if(status.active) CircularProgressIndicator()
-            Text(feedback ?: status.message ?: "Finishing your video. Original recordings are preserved.")
+            Text(feedback ?: status.message ?: "Your original recordings are preserved.",style=MaterialTheme.typography.bodyMedium)
             if(status.active && status.state!=ExportState.Publishing) TextButton(colors=ButtonDefaults.textButtonColors(contentColor=Color(0xFFF2D4BC)),onClick={ExportJournal.cancelRequested=true}) { Text("Cancel") }
-            if(status.state==ExportState.Completed && status.uri!=null) {
-                Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={context.startActivity(Intent(context,FinishedPlaybackActivity::class.java).setData(status.uri.toUri()))}) { Text("Play") }
-                Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={
-                    val uri=status.uri.toUri()
-                    val intent=Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM,uri)
-                        .apply { clipData=ClipData.newRawUri("SkitCam video",uri);addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                    context.startActivity(Intent.createChooser(intent,"Share video"))
-                }) { Text("Share") }
-            }
             if(status.state in setOf(ExportState.Failed,ExportState.Cancelled)) Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={retry()}) { Text("Retry") }
-            if(!status.active) Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick=onNewRecording) { Text("New Recording") }
+            if(!status.active && status.state!=ExportState.Completed) Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick=onNewRecording) { Text("New Recording") }
         }
     }
 }
@@ -77,10 +70,27 @@ class FinishedPlaybackActivity : ComponentActivity() {
     private var player: ExoPlayer?=null
     internal val currentPlayer get()=player
     private lateinit var view: PlayerView
+    private var resumeAt=0L
+    private var resumePlaying=false
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         view=PlayerView(this)
-        setContentView(view)
+        resumeAt=savedInstanceState?.getLong("position") ?: 0L
+        resumePlaying=savedInstanceState?.getBoolean("playing") ?: false
+        setContent {
+            MaterialTheme(colorScheme=darkColorScheme()) {
+                Surface(color=Color.Black,contentColor=Color.White) {
+                    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
+                            com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Back,if(intent.getBooleanExtra("from_gallery",false)) "Back to gallery" else "Back to camera") { finish() }
+                            Text("Saved video",style=MaterialTheme.typography.titleMedium)
+                            com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Share,"Share video") { share() }
+                        }
+                        AndroidView(factory={view},modifier=Modifier.fillMaxWidth().weight(1f))
+                    }
+                }
+            }
+        }
     }
     override fun onStart() {
         super.onStart()
@@ -95,8 +105,18 @@ class FinishedPlaybackActivity : ComponentActivity() {
                     finish()
                 }
             })
-            it.setMediaItem(MediaItem.fromUri(uri));it.prepare()
+            it.setMediaItem(MediaItem.fromUri(uri));it.seekTo(resumeAt);it.playWhenReady=resumePlaying;it.prepare()
         }
     }
-    override fun onStop() { view.player=null;player?.release();player=null;super.onStop() }
+    private fun share() {
+        val uri=intent.data ?: return
+        try {
+            val send=Intent(Intent.ACTION_SEND).setType("video/mp4").putExtra(Intent.EXTRA_STREAM,uri).apply {
+                clipData=ClipData.newRawUri("SkitCam video",uri);addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send,"Share video"))
+        } catch(_: ActivityNotFoundException) { android.widget.Toast.makeText(this,"No sharing app available",android.widget.Toast.LENGTH_SHORT).show() }
+    }
+    override fun onSaveInstanceState(outState: Bundle) { outState.putLong("position",player?.currentPosition ?: resumeAt);outState.putBoolean("playing",player?.playWhenReady ?: resumePlaying);super.onSaveInstanceState(outState) }
+    override fun onStop() { resumeAt=player?.currentPosition ?: resumeAt;resumePlaying=player?.playWhenReady ?: resumePlaying;view.player=null;player?.release();player=null;super.onStop() }
 }

@@ -51,13 +51,13 @@ class CameraDeviceTest {
         assertTrue("$label: ${camera.message}; ${activity.photoModel.message}; ${activity.recordingModel.snapshots.value}",block())
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m8validation") || context.packageName.endsWith(".m9validation")) { "Use the isolated Milestone 8 validation application." }
+        check(context.packageName.endsWith(".m8validation") || (context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation"))) { "Use the isolated Milestone 8 validation application." }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation"); shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity=it; camera=it.cameraModel; it.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
         await("recovery") { camera.ready && activity.recordingModel.recovered.value && activity.photoModel.recovered }
-        if(context.packageName.endsWith(".m9validation") && activity.recordingModel.snapshots.value.state==RecordingState.Error && !activity.recordingModel.snapshots.value.unresolved) {
+        if((context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation")) && activity.recordingModel.snapshots.value.state==RecordingState.Error && !activity.recordingModel.snapshots.value.unresolved) {
             activity.recordingModel.stop()
             await("close settled validation failure") { activity.recordingModel.snapshots.value.state==RecordingState.Completed }
         }
@@ -124,12 +124,14 @@ class CameraDeviceTest {
         await("photo after recreation") { camera.streaming }
         assertEquals(CameraChoice(CameraMode.Photo,CameraLens.Front),camera.choice)
         assertTrue(camera.grid); assertEquals(3,camera.timer)
+        await("recent photo preference committed") { context.getSharedPreferences("camera_preferences",0).getString("media_uri",null)==activity.photoModel.lastUri.toString() }
         lateinit var fresh: CameraModel
         inst.runOnMainSync { fresh = CameraModel(context.applicationContext as android.app.Application) }
         await("disk preferences loaded") { fresh.loaded }
         inst.runOnMainSync { fresh.initialize(activity.recordingModel.snapshots.value,false) }
         assertEquals(CameraChoice(CameraMode.Photo,CameraLens.Front),fresh.choice)
         assertTrue(fresh.grid); assertEquals(3,fresh.timer)
+        assertEquals(activity.photoModel.lastUri.toString(),fresh.latestUri);assertEquals("image/jpeg",fresh.latestType)
         camera.timer(0); camera.grid(false)
     }
     @Test fun c_landscapePhoto() {
@@ -258,7 +260,7 @@ class CameraDeviceTest {
         inst.runOnMainSync { camera.adjustZoom(1f) }
         fun click(text: String) {
             fun target(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
-                if(node.text?.toString()==text && node.isVisibleToUser) return node
+                if((node.text?.toString()==text || node.contentDescription?.toString()==text) && node.isVisibleToUser) return node
                 for(i in 0 until node.childCount) node.getChild(i)?.let { child -> target(child)?.let { return it } }
                 return null
             }
@@ -268,7 +270,7 @@ class CameraDeviceTest {
             assertTrue(node!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
         }
         click("Settings");click("Close")
-        click("Quick");click("Close")
+        click("Quick settings");click("Close")
         assertTrue(camera.streaming)
     }
 
@@ -305,7 +307,7 @@ class CameraDeviceTest {
     @Test fun k_galleryOpensPublishedPhotoAndReturnsToCamera() {
         choose(CameraMode.Photo);capture(true)
         fun target(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
-            if(node.contentDescription?.contains("Open latest saved media")==true && node.isVisibleToUser) return node
+            if(node.contentDescription?.contains("Open saved media gallery")==true && node.isVisibleToUser) return node
             for(i in 0 until node.childCount) node.getChild(i)?.let { child -> target(child)?.let { return it } }
             return null
         }
@@ -313,10 +315,31 @@ class CameraDeviceTest {
         await("gallery shortcut") { inst.uiAutomation.clearCache();node=inst.uiAutomation.rootInActiveWindow?.let(::target);node!=null }
         while(node?.isClickable!=true && node?.parent!=null) node=node?.parent
         assertTrue(node!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        var entry: com.calvinmazhindu.skitcam.gallery.SavedMedia?=null
+        await("gallery includes captured photo") {
+            inst.runOnMainSync {
+                val gallery=androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED)
+                    .filterIsInstance<com.calvinmazhindu.skitcam.gallery.SavedMediaActivity>().firstOrNull()
+                entry=gallery?.currentItems?.find { it.uri==activity.photoModel.lastUri.toString() }
+            }
+            entry!=null
+        }
+        fun photoRow(n: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
+            if(n.contentDescription?.toString()=="Open photo ${entry!!.name}" && n.isVisibleToUser) return n
+            for(i in 0 until n.childCount) n.getChild(i)?.let { photoRow(it)?.let { found->return found } }
+            return null
+        }
+        await("photo row") { inst.uiAutomation.clearCache();node=inst.uiAutomation.rootInActiveWindow?.let(::photoRow);node!=null }
+        while(node?.isClickable!=true && node?.parent!=null) node=node?.parent
+        assertTrue(node!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
         await("external image viewer") {
             inst.uiAutomation.clearCache()
             inst.uiAutomation.rootInActiveWindow?.packageName?.toString()?.let { it!=context.packageName && it!="com.android.systemui" }==true
         }
+        inst.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        // The browser remains available after review; a second Back returns to camera.
+        Thread.sleep(300)
         inst.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
         await("camera after photo viewing") { camera.streaming }
     }

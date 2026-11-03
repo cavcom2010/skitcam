@@ -12,7 +12,7 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('root',type=Path)
 parser.add_argument('--package',required=True)
 args=parser.parse_args()
-assert args.package.endswith('.m9validation'), "Use the dedicated validation app"
+assert args.package.endswith(('.m9validation','.m10validation')), "Use the dedicated validation app"
 root=args.root
 root.mkdir(parents=True,exist_ok=False)
 sid=str(uuid.uuid4());folder=root/'files'/'sessions'/sid;folder.mkdir(parents=True)

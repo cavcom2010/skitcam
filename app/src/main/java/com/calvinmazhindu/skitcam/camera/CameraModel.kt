@@ -28,6 +28,9 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     var message by mutableStateOf<String?>(null)
     var grid by mutableStateOf(false); private set
     var timer by mutableIntStateOf(0); private set
+    var receipt by mutableStateOf<SaveReceipt?>(null); private set
+    var savedNotice by mutableStateOf<SavedVideo?>(null); private set
+    var boundInfo by mutableStateOf<BoundCameraInfo?>(null); private set
     var acknowledgedExport by mutableStateOf<String?>(null); private set
     var latestUri by mutableStateOf<String?>(null); private set
     var latestType by mutableStateOf("image/jpeg"); private set
@@ -54,6 +57,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
             grid = prefs.getBoolean("grid", false)
             timer = prefs.getInt("timer", 0).takeIf { it in listOf(0,3,10) } ?: 0
             acknowledgedExport = prefs.getString("acknowledged_export", null)
+            receipt = runCatching { prefs.getString("video_return_v1",null)?.let(SaveReceipt::decode) }.getOrNull()
             latestTime = prefs.getLong("media_time",0L)
             latestUri = prefs.getString("media_uri", null)
             latestType = prefs.getString("media_type", "image/jpeg")!!
@@ -77,8 +81,8 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (next == choice) return
         switching = true; streaming = false; message = null; choice = next
     }
-    fun bound(value: Camera, size: String) {
-        camera = value; generation++; resolution = size
+    fun bound(value: Camera, size: String, info: BoundCameraInfo? = null) {
+        camera = value; generation++; resolution = size; boundInfo=info
         val state = value.cameraInfo.zoomState.value
         minZoom = state?.minZoomRatio ?: 1f; maxZoom = state?.maxZoomRatio ?: 1f
         zoom = state?.zoomRatio ?: 1f
@@ -103,7 +107,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (switching) { choice = committed; switching = false }
     }
     fun idle() { streaming = false; focusToken++; focus = null }
-    fun released() { video.release(); lastMeteringPoint=null; camera = null; generation++; streaming = false; focus = null }
+    fun released() { video.release(); boundInfo=null; lastMeteringPoint=null; camera = null; generation++; streaming = false; focus = null }
     val observedZoom get() = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
     fun adjustZoom(ratio: Float) {
         val current = camera ?: return
@@ -160,11 +164,44 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     }
     fun grid(value: Boolean) { grid = value; prefs.edit { putBoolean("grid", value) } }
     fun timer(value: Int) { require(value in listOf(0,3,10)); timer = value; prefs.edit { putInt("timer", value) } }
-    fun acknowledge(id: String) { acknowledgedExport = id; prefs.edit { putString("acknowledged_export", id) } }
+    fun exportHandled(id: String) = SaveReturnPolicy.handled(id,receipt,acknowledgedExport)
+    fun published(video: SavedVideo, lens: CameraLens) {
+        if(!SaveReturnPolicy.accepts(video,receipt)) return
+        val already=exportHandled(video.sessionId)
+        receipt=SaveReceipt(video,already)
+        if(video.createdAtMs>=latestTime) {
+            latestTime=video.createdAtMs;latestUri=video.uri;latestType="video/mp4"
+        }
+        if(!already) {
+            val next=CameraChoice(CameraMode.SkitVideo,lens)
+            if(choice!=next) { choice=next;streaming=false }
+            // Automatic return is deliberately NOT a user preference transition.
+        }
+        persistMediaState()
+    }
+    fun cameraReturned() {
+        val pending=receipt?.takeIf { !it.handled } ?: return
+        receipt=pending.copy(handled=true);acknowledgedExport=pending.video.sessionId
+        savedNotice=pending.video
+        persistMediaState()
+    }
+    fun dismissSavedNotice() { savedNotice=null }
+    private fun persistMediaState() {
+        viewModelScope.launch { preferenceWrites.withLock {
+            val current=receipt
+            val uri=latestUri;val type=latestType;val time=latestTime;val ack=acknowledgedExport
+            val saved=withContext(kotlinx.coroutines.NonCancellable+Dispatchers.IO) {
+                prefs.edit().putString("video_return_v1",current?.encode()).putString("media_uri",uri)
+                    .putString("media_type",type).putLong("media_time",time).putString("acknowledged_export",ack).commit()
+            }
+            if(!saved) message="Saved-media details could not be remembered. Files are preserved."
+        } }
+    }
+    fun acknowledge(id: String) { acknowledgedExport=id;persistMediaState() }
     fun media(uri: Uri, type: String, createdAtMs: Long) {
         if(createdAtMs < latestTime) return
         latestTime = createdAtMs
         latestUri = uri.toString(); latestType = type
-        prefs.edit { putString("media_uri", uri.toString()); putString("media_type", type); putLong("media_time",createdAtMs) }
+        persistMediaState()
     }
 }

@@ -25,7 +25,7 @@ class ProfileRecoveryDeviceTest {
         assertTrue(message+": "+ExportJournal.status.value,block())
     }
     @Test fun a_savePausedProfileCheckpoint() {
-        check(context.packageName.endsWith(".m9validation"))
+        check((context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation")))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO)) inst.uiAutomation.executeShellCommand("pm grant ${context.packageName} $p").close()
         val scenario=ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -49,14 +49,15 @@ class ProfileRecoveryDeviceTest {
             model.pause();await("paused") { model.snapshots.value.state==RecordingState.Paused }
             val session=model.snapshots.value.session!!
             val metadata=File(context.filesDir,"sessions/${session.id}/session.json").readText()
-            File(context.filesDir,"validation-m9/recovery-checkpoint.json").writeText(JSONObject().put("sessionId",session.id).put("metadata",metadata).toString(2))
+            val directory=File(context.filesDir,"validation-m9").apply { check(isDirectory || mkdirs()) }
+            File(directory,"recovery-checkpoint.json").writeText(JSONObject().put("sessionId",session.id).put("metadata",metadata).toString(2))
             // Opposing idle preferences must never override a recovered session.
             assertTrue(context.getSharedPreferences("video_preferences",0).edit().putString("camera_0",VideoJson.settings(VideoSettings("HD",30)).toString()).commit())
             assertTrue(context.getSharedPreferences("camera_preferences",0).edit().putString("mode",CameraMode.Photo.name).commit())
         } finally { scenario.close() }
     }
     @Test fun b_recoverExactProfileBeforePreferencesAndResume() {
-        check(context.packageName.endsWith(".m9validation"))
+        check((context.packageName.endsWith(".m9validation") || context.packageName.endsWith(".m10validation")))
         val checkpoint=JSONObject(File(context.filesDir,"validation-m9/recovery-checkpoint.json").readText())
         val expected=SessionCodec.decode(checkpoint.getString("metadata"))
         val scenario=ActivityScenario.launch(MainActivity::class.java)

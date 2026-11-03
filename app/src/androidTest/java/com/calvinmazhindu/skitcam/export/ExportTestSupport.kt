@@ -4,7 +4,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
 
-/** Existing camera tests retain their original assertions and enter through New Recording. */
+/** Existing tests wait for the real export service; failures retain explicit recovery actions. */
 object ExportTestSupport {
     fun settle() {
         val end=System.nanoTime()+180_000_000_000L
@@ -13,7 +13,7 @@ object ExportTestSupport {
     }
     fun beforeCamera() {
         settle()
-        if(ExportJournal.status.value==null) return
+        if(ExportJournal.status.value==null || ExportJournal.status.value?.state==ExportState.Completed) return
         val instrumentation=InstrumentationRegistry.getInstrumentation()
         fun find(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
             if(n.text?.toString()=="New Recording" && n.isVisibleToUser) return n

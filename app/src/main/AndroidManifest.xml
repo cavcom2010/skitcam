@@ -20,6 +20,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SkitCam">
         <service android:name=".export.ExportService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
+        <activity android:name=".gallery.SavedMediaActivity" android:exported="false" />
         <activity android:name=".export.FinishedPlaybackActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

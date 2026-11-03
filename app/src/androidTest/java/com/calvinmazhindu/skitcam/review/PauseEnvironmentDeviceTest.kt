@@ -130,7 +130,10 @@ class PauseEnvironmentDeviceTest {
         assertNull(main { review.selection })
         await("audio/video after review") { model.snapshots.value.activeDurationMs >= 1200 }
         model.pause(); state(RecordingState.Paused)
-        repeat(4) {
+        // The wider M10 landscape preview can show six cards without scrolling.
+        // Retain an overflowing fixture so scrolling remains genuinely exercised.
+        val expectedCount=if(landscape) 8 else 6
+        repeat(expectedCount-2) {
             model.resume(pose); state(RecordingState.Recording)
             await("additional scroll fixture") { model.snapshots.value.activeDurationMs >= 1200 }
             model.pause(); state(RecordingState.Paused)
@@ -139,7 +142,7 @@ class PauseEnvironmentDeviceTest {
         await("scrollable strip") { node { it.contentDescription?.toString() == description && it.isScrollable } != null }
         assertTrue(node { it.contentDescription?.toString() == description }!!
             .performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
-        awaitThumbnail(6)
+        awaitThumbnail(expectedCount)
         screenshot(if (landscape) "landscape-scrolled" else "portrait-scrolled")
         model.stop(); state(RecordingState.Completed)
         val session = model.snapshots.value.session!!
@@ -193,7 +196,7 @@ class PauseEnvironmentDeviceTest {
         scenario.onActivity { review = it.reviewController }
         openFirst(); assertReviewActionsVisible(); play(); screenshot("landscape-review")
         verifyResume(270, true)
-        assertEquals(6, model.snapshots.value.count)
+        assertEquals(8, model.snapshots.value.count)
     }
     @Test fun c_missingCorruptAndThumbnailFallbacks() {
         val source = model.snapshots.value.session!!.segments.first()

@@ -27,7 +27,7 @@ class ExportDeviceTest {
     }
     private fun clickText(text: String) {
         fun find(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
-            if(node.isVisibleToUser && node.text?.toString()==text) return node
+            if(node.isVisibleToUser && (node.text?.toString()==text || node.contentDescription?.toString()==text)) return node
             for(i in 0 until node.childCount) node.getChild(i)?.let { child -> find(child)?.let { return it } }
             return null
         }
@@ -73,7 +73,21 @@ class ExportDeviceTest {
             ExportService.launch(context,session.id)
             Thread.sleep(500)
             assertEquals(previous,ExportJournal.status.value!!.uri)
-            clickText("Play")
+            await("Automatic return to a live camera") { model.cameraReady }
+            scenario.onActivity { assertEquals(result.uri,it.cameraModel.latestUri);assertTrue(it.cameraModel.streaming) }
+            clickText("Open saved media gallery")
+            var gallery: com.calvinmazhindu.skitcam.gallery.SavedMediaActivity?=null
+            var selected: com.calvinmazhindu.skitcam.gallery.SavedMedia?=null
+            await("Gallery lists published MP4") {
+                instrumentation.runOnMainSync {
+                    gallery=androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                        .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED)
+                        .filterIsInstance<com.calvinmazhindu.skitcam.gallery.SavedMediaActivity>().firstOrNull()
+                    selected=gallery?.currentItems?.find { it.uri==previous }
+                }
+                selected!=null
+            }
+            clickText("Open video ${selected!!.name}")
             var playback: FinishedPlaybackActivity?=null
             await("Finished player ready") {
                 instrumentation.runOnMainSync {
@@ -87,14 +101,15 @@ class ExportDeviceTest {
             }
             instrumentation.runOnMainSync { playback!!.currentPlayer!!.play() }
             Thread.sleep(500)
-            instrumentation.runOnMainSync { assertTrue(playback!!.currentPlayer!!.currentPosition>=100);playback!!.finish() }
-            clickText("Share")
+            instrumentation.runOnMainSync { assertTrue(playback!!.currentPlayer!!.currentPosition>=100) }
+            clickText("Share video")
             await("Android share chooser") {
                 if(android.os.Build.VERSION.SDK_INT>=33) instrumentation.uiAutomation.clearCache()
                 instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() in setOf("android","com.android.intentresolver")
             }
             instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
-            clickText("New Recording")
+            instrumentation.runOnMainSync { playback!!.finish() }
+            clickText("Back to camera")
             await("Camera available after finished actions") { model.cameraReady }
         } finally { scenario.close();shell("wm user-rotation $rotation") }
     }

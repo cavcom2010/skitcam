@@ -24,6 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.*
+import com.calvinmazhindu.skitcam.camera.CameraSymbol
+import com.calvinmazhindu.skitcam.camera.CameraIcon
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -31,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, cameraGranted: Boolean,
+    showShortcuts: Boolean = false, verticalShutter: Boolean = false, leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
     beforeRecording: () -> Unit = {}, onArrange: () -> Unit = {}, onBackground: () -> Unit = beforeRecording) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
@@ -111,24 +115,37 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if(snapshot.state == RecordingState.Completed) "Ready" else snapshot.state.name, color = Color.White, style = MaterialTheme.typography.labelSmall)
-        val fresh = snapshot.state == RecordingState.Completed
-        val seconds = if(fresh) 0L else snapshot.durationMs / 1000
-        Text("%02d:%02d · %d/100 kept".format(seconds / 60, seconds % 60, if(fresh) 0 else snapshot.count) + if (!fresh && snapshot.session?.durationEstimated == true) " · estimated" else "",
-            color = Color.White, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
+        val fresh = snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed)
+        if(!fresh) {
+            val seconds=snapshot.durationMs/1000
+            Text("%02d:%02d · %d kept".format(seconds/60,seconds%60,snapshot.count),color=Color.White,
+                style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center)
+        }
+        @Composable fun Shutter(enabled: Boolean, label: String, icon: CameraIcon, onClick: ()->Unit) {
+            Button(onClick=onClick,enabled=enabled,shape=androidx.compose.foundation.shape.CircleShape,modifier=Modifier.size(80.dp)
+                .semantics { contentDescription=label },contentPadding=PaddingValues(0.dp),
+                colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFAE3447),contentColor=Color.White)) {
+                CameraSymbol(icon,Modifier.size(36.dp),if(enabled) Color.White else Color.Gray)
+            }
+        }
         when (snapshot.state) {
-            RecordingState.Ready, RecordingState.Completed -> Button(
-                onClick = { releaseReview(); if (microphone) model.start(pose) else requestAudio() }, enabled = canStart,
-                shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(80.dp),contentPadding=PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor=Color(0xFF9F3442),contentColor=Color.White)) { Text("START") }
-            RecordingState.Recording -> Button(onClick = { model.pause() },shape = androidx.compose.foundation.shape.CircleShape,modifier=Modifier.size(80.dp),contentPadding=PaddingValues(0.dp)) { Text("PAUSE") }
-            RecordingState.Paused -> Button(
-                onClick = { releaseReview(); if (microphone) model.resume(pose) else requestAudio() }, enabled = canResume,modifier=Modifier.heightIn(min=56.dp)) { Text("RESUME") }
-            else -> Unit
+            RecordingState.Ready, RecordingState.Completed -> {
+                @Composable fun IdleShutter() { Shutter(canStart,"Start recording",CameraIcon.Record) { releaseReview();if(microphone) model.start(pose) else requestAudio() } }
+                if(verticalShutter) Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    leading();IdleShutter();trailing()
+                } else Row(Modifier.fillMaxWidth(),horizontalArrangement=if(showShortcuts) Arrangement.SpaceBetween else Arrangement.Center,
+                    verticalAlignment=Alignment.CenterVertically) { leading();IdleShutter();trailing() }
+            }
+            RecordingState.Recording -> Shutter(true,"Pause recording",CameraIcon.Pause) { model.pause() }
+            RecordingState.Paused -> Button(contentPadding=PaddingValues(horizontal=12.dp,vertical=8.dp),onClick={releaseReview();if(microphone) model.resume(pose) else requestAudio()},enabled=canResume,
+                modifier=Modifier.heightIn(min=56.dp).semantics { contentDescription="Resume recording" }) { Text("RESUME",maxLines=1) }
+            else -> CircularProgressIndicator(Modifier.size(36.dp).semantics { contentDescription=snapshot.state.name })
         }
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed)) {
-            OutlinedButton(onClick = { releaseReview(); model.stop() }, enabled = !snapshot.unresolved && snapshot.state == RecordingState.Error ||
-                snapshot.state in setOf(RecordingState.Recording, RecordingState.Paused)) { Text("STOP") }
+            if(snapshot.state==RecordingState.Recording) IconButton(onClick={releaseReview();model.stop()},modifier=Modifier.size(48.dp)
+                .semantics { contentDescription="Stop recording" }) { CameraSymbol(CameraIcon.Stop) }
+            else OutlinedButton(onClick={releaseReview();model.stop()},enabled=!snapshot.unresolved && snapshot.state in setOf(RecordingState.Error,RecordingState.Paused),
+                modifier=Modifier.heightIn(min=48.dp).semantics { contentDescription="Stop recording" }) { Text("STOP") }
         }
         if (snapshot.state == RecordingState.Paused) {
             TextButton(onClick = onArrange, enabled = snapshot.count >= 2 && !snapshot.unresolved,
@@ -139,9 +156,9 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         val warning = when {
             snapshot.state == RecordingState.Error -> snapshot.message
             snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
-                if (desiredPose == null) "Hold the phone upright and steady to enable START."
+                if (desiredPose == null) "Hold upright to record"
                 else "Wrong orientation. Return to the original $desiredPose° direction to RESUME."
-            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> "Rotate the phone to match the preview orientation before START."
+            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> "Match the preview orientation"
             !microphone -> if (requested) "Microphone access is off. Tap START or RESUME to allow it in permissions or settings."
                 else "Audio is required. START requests microphone permission; press START again after allowing it."
             else -> if(snapshot.state == RecordingState.Completed) null else snapshot.message
