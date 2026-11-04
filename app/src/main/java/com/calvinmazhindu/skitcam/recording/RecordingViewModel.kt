@@ -16,8 +16,11 @@ import java.util.concurrent.Executors
 
 class RecordingViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
-        private var shared: RecordingRuntime? = null
+        @Volatile private var shared: RecordingRuntime? = null
         fun cameraReleasedForExport(): Boolean = shared?.cameraReady != true
+        /** Read-only priority hint; optional archiving never gates recording commands. */
+        fun captureBusyForProject(): Boolean = shared?.let { !it.recovered.value || it.commandPending.value || it.snapshots.value.state in setOf(
+            RecordingState.Starting,RecordingState.Recording,RecordingState.Finalising,RecordingState.Stopping) }==true
         private fun runtime(application: Application) = synchronized(this) {
             shared ?: RecordingRuntime(application).also { shared = it }
         }

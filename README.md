@@ -1,6 +1,10 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Version **0.11.0** adds optional portable project ZIP export from a selected saved
+SkitCam video. Normal STOP → verified MP4 → live-camera return remains unchanged.
+See [VALIDATION_M11.md](VALIDATION_M11.md) for archive format, validation and limits.
+
 Version **0.10.1** corrects video viewfinder cropping on both cameras and explicitly
 applies the default 1.0× zoom on mode/lens changes. See
 [VALIDATION_VIDEO_FRAMING.md](VALIDATION_VIDEO_FRAMING.md) for preview-versus-MP4 evidence.
@@ -33,6 +37,77 @@ The recording/export workflow has been exercised on the Moto G54, including Play
 and the standard Share chooser. Reordered non-keyframe trims also passed independent
 scene/audio measurements. See [VALIDATION_M6.md](VALIDATION_M6.md) for actual test
 results, preservation evidence and remaining platform/stress checks.
+
+## Optional portable project export (0.11.0)
+
+Open **Gallery**, select a completed SkitCam video, then **Video options → Export
+Project**. The finished video is always included. Original segments are included
+by default; **discarded takes are excluded unless you explicitly select them**.
+Originals contain the entire take, including footage outside saved trims. The
+portable metadata retains Keep/Discard and edit decisions even when a source is
+omitted. This action exports only the selected session, never the whole gallery.
+
+Choose a destination with Android's system file picker. Choose a local folder for
+an offline archive; another provider you explicitly choose may sync using its own
+service. No account, network permission or broad filesystem permission is added.
+
+```text
+SkitCam_Project_<date>_<job-id>.zip
+├── Finished_Video.mp4
+├── Original_Segments/segment_001.mp4  # selected originals, recording chronology
+├── session.json                     # portable schema 1, UTF-8
+└── checksums.sha256                  # SHA-256 for every other entry
+```
+
+Segment filenames are relative and generated; stable IDs, recording chronology
+and saved playback order are separate. Saved trims use integer milliseconds,
+start inclusive/end exclusive. `savedTrim` preserves the exact saved decision;
+`finishedTimeline[].resolvedRange` describes what the finished MP4 used. Older
+unknown source facts remain null. No private Android paths, content URIs or camera
+IDs are required by the manifest. This is an archive format, **not a DaVinci Resolve
+timeline import format**.
+
+A separate foreground copy job streams uncompressed ZIP entries with bounded
+buffers. It never owns the camera, microphone or encoder and waits while recording,
+photo saving or automatic MP4 finishing is busy. You can return to the camera; its
+notification or Gallery's **Project exports** action opens the latest job. A job
+snapshot and recovery receipt are atomic and separate from recording metadata.
+Retry uses the existing destination; a completed write is verified again rather
+than copied twice. An interrupted write restarts from the beginning, not a claimed
+mid-file resume. Android may stop long-running work; retry remains explicit.
+
+The destination is named `.partial.zip` until every entry and the entire ZIP have
+passed readback checks, including its closing directory. Final rename and another
+whole-file hash check precede success. Providers must support persistent access,
+readback and safe rename. Unsupported destinations fail with an explanation;
+publication is never inferred merely from a successful write. If a provider loses
+its rename response, **Locate saved archive** verifies the existing document
+before accepting it. Cancellation removes only this job's identifiable partial
+document when the provider allows it. Unremovable partials remain clearly named;
+original footage, finished MP4s and session metadata are never cleaned up.
+
+ZIP64 supports entries/archives above 4 GiB with compatible tools/providers. It
+does not remove a destination filesystem's limits (for example FAT32), provider
+quotas or Android processing limits. The media-size estimate excludes small ZIP
+headers/metadata; MP4s are stored without compression, so allow additional room.
+There is no full extra local copy of the project. Verification requires additional
+streaming reads, so large archives take time.
+
+Copy the ZIP from the selected folder to Ubuntu/Windows using USB file transfer,
+a removable drive or your chosen file-transfer method. On Ubuntu, independently
+check it with:
+
+```bash
+python3 tools/verify_portable_project.py /path/to/SkitCam_Project_....zip
+unzip -t /path/to/SkitCam_Project_....zip
+```
+
+Extract with a current ZIP64-capable tool. From inside the extracted folder,
+`sha256sum -c checksums.sha256` verifies payloads and metadata. On Windows, 7-Zip
+can test/extract the archive and PowerShell `Get-FileHash -Algorithm SHA256` can
+check individual files against the manifest. Import the original MP4s into a
+normal desktop editor such as DaVinci Resolve; reconstruct saved order/trims
+manually using `session.json` if needed. Native timeline generation is future work.
 
 ## Save return and recent media (0.10.0)
 

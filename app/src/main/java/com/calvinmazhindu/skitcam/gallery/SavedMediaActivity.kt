@@ -57,6 +57,7 @@ class SavedMediaActivity : ComponentActivity() {
     }
     @Composable private fun Gallery() {
         var entries by remember { mutableStateOf<List<SavedMedia>>(emptyList()) }
+        var projectJob by remember { mutableStateOf<String?>(null) }
         var loading by remember { mutableStateOf(true) }
         var error by remember { mutableStateOf<String?>(null) }
         var filter by rememberSaveable { mutableStateOf(GalleryFilter.All) }
@@ -68,6 +69,7 @@ class SavedMediaActivity : ComponentActivity() {
         }
         LaunchedEffect(revision) {
             loading=true;error=null
+            projectJob=withContext(Dispatchers.IO) { com.calvinmazhindu.skitcam.project.ProjectJobs.latest(this@SavedMediaActivity) }
             if(permitted()) {
                 val result=withContext(Dispatchers.IO) { runCatching { SavedMediaStore(this@SavedMediaActivity).read() } }
                 entries=result.getOrDefault(emptyList());currentItems=entries
@@ -105,6 +107,7 @@ class SavedMediaActivity : ComponentActivity() {
                     }
                 }
             }
+            projectJob?.let { id -> TextButton(onClick={startActivity(Intent(this@SavedMediaActivity,com.calvinmazhindu.skitcam.project.ProjectExportActivity::class.java).putExtra("job",id))},modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)) { Text("Project exports") } }
             TextButton(onClick={picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))},enabled=!opening,
                 modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)) { Text("Browse phone") }
         }

@@ -19,6 +19,8 @@
         android:label="${appLabel}"
         android:supportsRtl="true"
         android:theme="@style/Theme.SkitCam">
+        <service android:name=".project.ProjectExportService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name=".project.ProjectExportActivity" android:exported="false" />
         <service android:name=".export.ExportService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
         <activity android:name=".gallery.SavedMediaActivity" android:exported="false" />
         <activity android:name=".export.FinishedPlaybackActivity" android:exported="false" />

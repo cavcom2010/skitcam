@@ -9,6 +9,10 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -72,18 +76,33 @@ class FinishedPlaybackActivity : ComponentActivity() {
     private lateinit var view: PlayerView
     private var resumeAt=0L
     private var resumePlaying=false
+    private var projectAvailable by mutableStateOf(false)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         view=PlayerView(this)
         resumeAt=savedInstanceState?.getLong("position") ?: 0L
         resumePlaying=savedInstanceState?.getBoolean("playing") ?: false
+        lifecycleScope.launch {
+            projectAvailable=withContext(Dispatchers.IO) { intent.data?.let { com.calvinmazhindu.skitcam.project.CompletedProjectCatalog(this@FinishedPlaybackActivity).find(it) }!=null }
+        }
         setContent {
             MaterialTheme(colorScheme=darkColorScheme()) {
                 Surface(color=Color.Black,contentColor=Color.White) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
                             com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Back,if(intent.getBooleanExtra("from_gallery",false)) "Back to gallery" else "Back to camera") { finish() }
-                            Text("Saved video",style=MaterialTheme.typography.titleMedium)
+                            Text("Saved video",Modifier.weight(1f),style=MaterialTheme.typography.titleMedium)
+                            if(projectAvailable) {
+                                var menu by remember { mutableStateOf(false) }
+                                Box {
+                                    com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.More,"Video options") { menu=true }
+                                    DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
+                                        DropdownMenuItem(text={Text("Export Project")},onClick={
+                                            menu=false;startActivity(Intent(this@FinishedPlaybackActivity,com.calvinmazhindu.skitcam.project.ProjectExportActivity::class.java).setData(intent.data))
+                                        })
+                                    }
+                                }
+                            }
                             com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Share,"Share video") { share() }
                         }
                         AndroidView(factory={view},modifier=Modifier.fillMaxWidth().weight(1f))

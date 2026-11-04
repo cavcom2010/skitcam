@@ -17,7 +17,8 @@ import java.util.concurrent.Executors
 /** Activity recreation keeps the draft/countdown; process-level IO completes an already captured save. */
 class PhotoModel(application: Application) : AndroidViewModel(application) {
     companion object {
-        private var shared: PhotoRuntime? = null
+        @Volatile private var shared: PhotoRuntime? = null
+        fun savingForProject(): Boolean = shared?.busy==true
         private fun runtime(app: Application) = synchronized(this) { shared ?: PhotoRuntime(app).also { shared = it } }
     }
     private val runtime = runtime(application)

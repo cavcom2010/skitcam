@@ -52,7 +52,7 @@ class CameraUxDeviceTest {
         assertTrue("$label clickable",node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
     }
     @Before fun open() {
-        check((context.packageName.endsWith(".m10validation") || context.packageName.endsWith(".framingvalidation"))) { "Use the isolated M10 app" }
+        check((context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation")))) { "Use the isolated M10 app" }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)

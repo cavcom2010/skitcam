@@ -12,7 +12,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 
-enum class CameraIcon { Settings, Quick, Microphone, MicOff, Record, Pause, Stop, Back, Share }
+enum class CameraIcon { Settings, Quick, Microphone, MicOff, Record, Pause, Stop, Back, Share, More }
 
 /** Original simple geometry, independent of an external icon library. */
 @Composable
@@ -21,6 +21,7 @@ fun CameraSymbol(icon: CameraIcon, modifier: Modifier=Modifier, color: Color=Col
         val unit=size.minDimension/24f;val stroke=2f*unit
         fun point(x: Float,y: Float)=Offset(x*unit,y*unit)
         when(icon) {
+            CameraIcon.More -> repeat(3) { drawCircle(color,1.7f*unit,point(12f,5f+it*7f)) }
             CameraIcon.Record -> drawCircle(color,radius=size.minDimension*.30f)
             CameraIcon.Pause -> { drawRect(color,point(6f,5f),Size(4*unit,14*unit));drawRect(color,point(14f,5f),Size(4*unit,14*unit)) }
             CameraIcon.Stop -> drawRoundRect(color,point(5f,5f),Size(14*unit,14*unit),CornerRadius(2*unit))
