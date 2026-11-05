@@ -184,6 +184,78 @@ class CameraUxDeviceTest {
         assertEquals(profile,model.port.profile)
         assertTrue(camera.streaming && model.cameraReady)
     }
+    @Test fun g_portraitOverlayTargetsAndDockGapDoNotFocusCamera() {
+        await("profile editable") { camera.video.canEdit() }
+        inst.runOnMainSync { camera.video.choose(com.calvinmazhindu.skitcam.video.VideoSettings()) }
+        await("default profile") { model.cameraReady && !camera.video.pending && camera.video.settings==com.calvinmazhindu.skitcam.video.VideoSettings() }
+        fun target(label: String): android.graphics.Rect {
+            var node: AccessibilityNodeInfo?=null
+            await("$label target") { node=find(label);node!=null }
+            while(node?.isClickable!=true && node?.parent!=null) node=node?.parent
+            return android.graphics.Rect().apply {
+                node!!.getBoundsInScreen(this)
+                val minimum=48*activity.resources.displayMetrics.density-2
+                assertTrue("$label touch target clipped $this",width()>=minimum && height()>=minimum)
+                val safe=androidx.core.view.ViewCompat.getRootWindowInsets(activity.window.decorView)!!
+                    .getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
+                assertTrue("$label outside safe area $this",left>=safe.left && top>=safe.top &&
+                    right<=activity.window.decorView.width-safe.right && bottom<=activity.window.decorView.height-safe.bottom)
+            }
+        }
+        for(label in listOf("Settings","Quick settings","Open saved media gallery","Switch to front camera","Start recording")) target(label)
+        // This point is inside the overlaid dock but outside its buttons. Inject actual
+        // screen input, not an accessibility action, to check sibling hit testing.
+        val shutter=target("Start recording")
+        val x=4*activity.resources.displayMetrics.density
+        val y=shutter.top+8*activity.resources.displayMetrics.density
+        fun preview(view: android.view.View): androidx.camera.view.PreviewView? {
+            if(view is androidx.camera.view.PreviewView) return view
+            if(view is android.view.ViewGroup) for(i in 0 until view.childCount) preview(view.getChildAt(i))?.let { return it }
+            return null
+        }
+        inst.runOnMainSync {
+            val view=checkNotNull(preview(activity.window.decorView));val xy=IntArray(2);view.getLocationOnScreen(xy)
+            assertTrue("Dock-gap probe must actually overlap the live image",x>=xy[0] && x<xy[0]+view.width && y>=xy[1] && y<xy[1]+view.height)
+        }
+        val down=android.os.SystemClock.uptimeMillis()
+        for(action in listOf(android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_UP)) {
+            val event=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,x,y,0)
+            event.source=android.view.InputDevice.SOURCE_TOUCHSCREEN
+            assertTrue(inst.uiAutomation.injectInputEvent(event,true));event.recycle()
+        }
+        Thread.sleep(300)
+        assertNull("Dock gap must not meter the underlying image",camera.focus)
+        assertEquals(1f,camera.observedZoom,.01f)
+        shot("immersive-idle-portrait")
+        record();model.pause();await("paused") { model.snapshots.value.state==RecordingState.Paused }
+        val resume=target("Resume recording");val stop=target("Stop recording")
+        val arrange=target("Arrange")
+        assertFalse(android.graphics.Rect.intersects(resume,stop))
+        assertFalse(android.graphics.Rect.intersects(stop,arrange))
+        var thumbnail: AccessibilityNodeInfo?=null
+        await("thumbnail") { thumbnail=find("Review segment 1,",prefix=true);thumbnail!=null }
+        val thumb=android.graphics.Rect();thumbnail!!.getBoundsInScreen(thumb)
+        assertTrue("Thumbnail must stay above dock",thumb.bottom<=resume.top)
+        shot("immersive-paused-portrait")
+        click("Review segment 1,",prefix=true)
+        await("review visible") { find("Trim")!=null && find("Keep")!=null && find("Discard")!=null }
+        await("review player ready: ${activity.reviewController.error}") {
+            var ready=false
+            inst.runOnMainSync { ready=activity.reviewController.player?.playbackState==androidx.media3.common.Player.STATE_READY }
+            ready
+        }
+        for(label in listOf("Trim","Keep","Discard","Close")) {
+            val r=target(label)
+            assertFalse("$label collides with RESUME",android.graphics.Rect.intersects(r,resume))
+        }
+        shot("immersive-review-portrait")
+        click("Close")
+        click("Resume recording")
+        await("resumed") { model.snapshots.value.state==RecordingState.Recording && model.snapshots.value.activeDurationMs>=1500 }
+        target("Pause recording");target("Stop recording")
+        click("Stop recording");finished()
+        shot("immersive-returned-portrait")
+    }
     @Test fun z_backgroundSaveCheckpoint() {
         // Next invocation force-stops only this validation package and runs recoveryCheckpoint.
         record();model.stop()

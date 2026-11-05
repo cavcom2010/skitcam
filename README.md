@@ -1,6 +1,12 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Version **0.11.1** gives portrait Skit Video a full-width, aspect-correct viewfinder
+where safe-area geometry permits, extending beneath the gradient-backed controls.
+Default 1.0× zoom, recording profiles and Photo layout are preserved. See
+[VALIDATION_IMMERSIVE_VIEWFINDER.md](VALIDATION_IMMERSIVE_VIEWFINDER.md) for measured
+geometry, preview-versus-MP4 comparisons and control-overlap limitations.
+
 Version **0.11.0** adds optional portable project ZIP export from a selected saved
 SkitCam video. Normal STOP → verified MP4 → live-camera return remains unchanged.
 See [VALIDATION_M11.md](VALIDATION_M11.md) for archive format, validation and limits.

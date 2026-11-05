@@ -27,6 +27,19 @@ class ViewfinderGeometryTest {
         val size=ViewfinderGeometry.fit(1800f,900f,16f/9f)!!
         assertEquals(1600f,size.width,.01f);assertEquals(900f,size.height,0f)
     }
+    @Test fun portraitVideoReachesFullWidthWhenDockDoesNotReserveImageHeight() {
+        val old=ViewfinderGeometry.fit(1080f,1658f,9f/16f)!!
+        val immersive=ViewfinderGeometry.fit(1080f,2400f-237f-120f,9f/16f)!!
+        assertTrue(old.width<1080f)
+        assertEquals(1080f,immersive.width,0f)
+        assertEquals(1920f,immersive.height,.01f)
+    }
+    @Test fun shortSafeRegionStillShowsTheWholeFrameInsteadOfForcingFullWidth() {
+        val result=ViewfinderGeometry.fit(1080f,1700f,9f/16f)!!
+        assertEquals(956.25f,result.width,.01f)
+        assertEquals(1700f,result.height,0f)
+        assertEquals(9f/16f,result.width/result.height,.0001f)
+    }
     @Test fun geometryHandlesSmallWindowsAndPhotoAspect() {
         for(aspect in listOf(3f/4f,4f/3f,9f/16f,16f/9f)) for(width in listOf(300f,1080f,2400f)) {
             val result=ViewfinderGeometry.fit(width,700f,aspect)!!

@@ -210,7 +210,9 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
         val ratio = if(photo) { if(landscape) 4f/3f else 3f/4f } else cameraModel.videoAspect
         val frame=ratio?.let { ViewfinderGeometry.fit(maxWidth.value,maxHeight.value,it) }
         val bounds=if(frame!=null) Modifier.size(frame.width.dp,frame.height.dp) else Modifier.fillMaxSize()
-        Box(bounds.align(Alignment.Center)
+        // Anchor immersive portrait video below the toolbar, exposing as much of the
+        // full frame above the controls as possible. Photo/landscape retain centering.
+        Box(bounds.align(if(!photo && !landscape) Alignment.TopCenter else Alignment.Center)
             .pointerInput(gesturesEnabled,choice) { if(gesturesEnabled) detectTapGestures { cameraModel.focus(view,it) } }
             .pointerInput(gesturesEnabled,choice) { if(gesturesEnabled) detectTransformGestures { _, _, scale, _ -> cameraModel.adjustZoom(cameraModel.zoom * scale) } }
             .semantics { contentDescription = "Camera preview. Tap to focus; pinch to zoom."

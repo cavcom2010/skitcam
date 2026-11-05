@@ -37,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -171,6 +173,7 @@ private fun MainActivity.CameraScreen() {
         if(photos.saveCount>seenPhotoSave) { seenPhotoSave=photos.saveCount;snackbars.showSnackbar("Photo saved",duration=SnackbarDuration.Short) }
     }
     val photo = camera.choice.mode == CameraMode.Photo
+    val immersiveVideo = !photo && !landscape
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
@@ -256,9 +259,13 @@ private fun MainActivity.CameraScreen() {
         if(!recovered || !camera.ready || !photos.recovered) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
+            // Portrait video uses the space beneath the dock too. Keep the complete fitted
+            // recording frame; dock height still reserves space for review/editing below.
             CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
-                top=with(density) { headerHeight.toDp() },bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp() },
-                end=if(landscape) dockWidth else 0.dp))
+                top=with(density) { headerHeight.toDp() },bottom=if(landscape) 56.dp else if(immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
+                end=if(landscape) dockWidth else 0.dp)
+                .then(if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
+                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -307,6 +314,13 @@ private fun MainActivity.CameraScreen() {
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
+                .then(if(immersiveVideo) Modifier.pointerInput(Unit) {
+                    // The dock overlays the image. Its empty spaces must not focus/pinch
+                    // the camera underneath; children handle their own input first.
+                    awaitPointerEventScope {
+                        while(true) awaitPointerEvent(PointerEventPass.Final).changes.forEach { it.consume() }
+                    }
+                } else Modifier)
                 .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))

@@ -53,7 +53,8 @@ class VideoDeviceTest {
         inst.runOnMainSync { ExportJournal.status.value?.takeIf { !it.active }?.let { camera.acknowledge(it.sessionId) } }
         await("stream") { camera.streaming }
         inst.runOnMainSync { camera.select(CameraMode.SkitVideo,CameraLens.Rear,true) }
-        await("ready rear video") { camera.streaming && !camera.switching && camera.choice==CameraChoice() && model.cameraReady }
+        await("ready rear video") { camera.streaming && !camera.switching && camera.choice==CameraChoice() &&
+            model.cameraReady && video.cameraId=="0" && model.boundLens==CameraLens.Rear }
     }
     @After fun close() { try { if(::scenario.isInitialized) scenario.close() } finally { originalRotation?.let { shell("wm user-rotation $it") } } }
     private fun choose(value: VideoSettings) {
@@ -86,17 +87,20 @@ class VideoDeviceTest {
         } else model.stop()
     }
     private fun finish(label: String) {
+        val sessionId=model.snapshots.value.session!!.id
         model.stop()
         await("completed") { model.snapshots.value.state==RecordingState.Completed }
-        await("published",180) { ExportJournal.status.value?.active==false }
+        // A prior completed publication can remain visible until the new export starts.
+        // Wait for this session and service teardown before requesting another profile.
+        await("published",180) { !ExportJournal.busy && ExportJournal.status.value?.let { it.sessionId==sessionId && !it.active }==true }
         val status=ExportJournal.status.value!!
         assertEquals(status.toString(),ExportState.Completed,status.state)
         val dir=File(context.filesDir,"validation-m9").apply { mkdirs() }
         File(dir,"$label.json").writeText(JSONObject().put("capabilities",video.diagnostic()).put("session",JSONObject(SessionCodec.encode(model.snapshots.value.session!!)))
             .put("export",ExportJournal.read(context,status.sessionId)).toString(2))
         context.contentResolver.openInputStream(android.net.Uri.parse(status.uri!!))!!.use { input -> File(dir,"$label.mp4").outputStream().use { input.copyTo(it) } }
-        inst.runOnMainSync { camera.acknowledge(status.sessionId) }
-        await("camera after export") { model.cameraReady }
+        await("camera after export") { model.cameraReady && camera.streaming && video.canEdit() &&
+            camera.receipt?.let { it.video.sessionId==sessionId && it.handled }==true }
     }
     @Test fun a_rearSupportedQualityAudioAndOutputGeometry() {
         val dir=File(context.filesDir,"validation-m9").apply { mkdirs() }

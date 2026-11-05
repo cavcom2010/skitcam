@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.view.View
 import android.view.ViewGroup
 import androidx.camera.view.PreviewView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -69,7 +71,14 @@ class VideoFramingDeviceTest {
         lateinit var report: JSONObject
         inst.runOnMainSync {
             val view=checkNotNull(preview())
+            val decor=activity.window.decorView
+            val insets=ViewCompat.getRootWindowInsets(decor)!!.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             report=camera.framing.snapshot(view).put("videoSettings",camera.video.diagnostic())
+                .put("recordingState",model.snapshots.value.state.name)
+                .put("windowWidth",decor.width).put("windowHeight",decor.height)
+                .put("safeLeft",insets.left).put("safeRight",insets.right).put("safeBottom",insets.bottom)
+                .put("fontScale",activity.resources.configuration.fontScale)
             view.bitmap?.let { bitmap -> File(folder,"$name-preview.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) };bitmap.recycle() }
         }
         inst.uiAutomation.takeScreenshot()?.let { bitmap -> File(folder,"$name-screen.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) };bitmap.recycle() }
@@ -96,6 +105,7 @@ class VideoFramingDeviceTest {
             val previewInfo=video.getJSONObject("preview")
             assertEquals("preview stream must match the capture aspect",info.getDouble("width")/info.getDouble("height"),
                 previewInfo.getDouble("width")/previewInfo.getDouble("height"),.015)
+            if(!landscape) assertImmersive(video)
         } else {
             inst.runOnMainSync { preview()!!.scaleType=PreviewView.ScaleType.FIT_CENTER }
             snapshot("$name-video-fit-probe")
@@ -104,13 +114,21 @@ class VideoFramingDeviceTest {
         inst.runOnMainSync { model.start(if(landscape) 270 else 0) }
         await("recording") { model.snapshots.value.state==RecordingState.Recording }
         await("five seconds") { model.snapshots.value.activeDurationMs>=5000 }
-        snapshot("$name-recording")
+        val recording=snapshot("$name-recording")
+        if(!baseline && !landscape) {
+            assertImmersive(recording)
+            assertEquals("dock changes must not shrink video",video.getInt("viewWidth"),recording.getInt("viewWidth"))
+        }
         if(!baseline) {
             model.pause();await("paused") { model.snapshots.value.state==RecordingState.Paused }
             assertTrue(model.cameraReady)
+            val paused=snapshot("$name-paused")
+            if(!landscape) assertImmersive(paused)
             model.resume(if(landscape) 270 else 0)
             await("resumed") { model.snapshots.value.state==RecordingState.Recording }
             await("second segment") { model.snapshots.value.activeDurationMs>=1700 }
+            val resumed=snapshot("$name-resumed")
+            if(!landscape) assertImmersive(resumed)
         }
         model.stop();await("completed") { model.snapshots.value.state==RecordingState.Completed }
         val session=checkNotNull(model.snapshots.value.session)
@@ -123,6 +141,14 @@ class VideoFramingDeviceTest {
         File(session.segments.first().path).copyTo(File(folder,"$name-source.mp4"),overwrite=false)
         await("live camera after export") { model.cameraReady && camera.streaming }
         snapshot("$name-returned")
+    }
+    private fun assertImmersive(report: JSONObject) {
+        val width=report.getInt("windowWidth")-report.getInt("safeLeft")-report.getInt("safeRight")
+        val height=report.getInt("windowHeight")-report.getInt("safeBottom")-report.getInt("viewY")
+        val frame=ViewfinderGeometry.fit(width.toFloat(),height.toFloat(),camera.videoAspect!!)!!
+        assertEquals("fit all available safe width/height",frame.width.toDouble(),report.getDouble("viewWidth"),2.0)
+        assertEquals("keep recording aspect",frame.height.toDouble(),report.getDouble("viewHeight"),2.0)
+        assertEquals("center within horizontal safe area",report.getInt("safeLeft")+(width-frame.width)/2.0,report.getDouble("viewX"),2.0)
     }
     @Test fun videoTouchFocusAndPinchUseVisibleFrame() {
         org.junit.Assume.assumeFalse(baseline)
