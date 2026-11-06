@@ -236,7 +236,7 @@ class ArrangementDeviceTest {
         text("Close")
         assertEquals(arranged - original.segments[0].id, model.snapshots.value.session!!.playbackOrder)
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        text("Keep"); await("restored") { model.snapshots.value.count == 3 }
+        text("Restore"); await("restored") { model.snapshots.value.count == 3 }
         text("Close")
         assertEquals((arranged - original.segments[0].id) + original.segments[0].id,
             model.snapshots.value.session!!.playbackOrder)

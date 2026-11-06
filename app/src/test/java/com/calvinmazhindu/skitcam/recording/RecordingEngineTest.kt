@@ -179,6 +179,23 @@ class RecordingEngineTest {
         restored.stop()
         assertEquals(RecordingState.Completed, restored.snapshot.state)
     }
+    @Test fun restoredPausedSessionWithPendingCandidateIsNotCertified() {
+        begin(); pause()
+        val paused = store.saved!!.copy(state = RecordingState.Paused,
+            pending = PendingSegment("candidate", "/sessions/session/segment_999.mp4", 2))
+        store.saved = paused
+        val restored = engine(); restored.restore()
+        assertEquals(RecordingState.Error, restored.snapshot.state)
+        assertEquals(paused.segments, restored.snapshot.session!!.segments)
+        assertNotNull(restored.snapshot.session!!.pending)
+        assertTrue(restored.snapshot.message!!.contains("not registered"))
+    }
+    @Test fun restoredPausedSessionReportsConfirmedClipCount() {
+        begin(); pause()
+        val restored = engine(); restored.restore()
+        assertEquals(RecordingState.Paused, restored.snapshot.state)
+        assertEquals("Recovered paused session · 1 confirmed clip.", restored.snapshot.message)
+    }
     @Test fun invalidMp4CannotBeRegistered() {
         begin(); engine.stop(); store.invalidMedia = true; recorder.done()
         assertEquals(0, engine.snapshot.count)

@@ -114,11 +114,18 @@ class RecordingEngine(
         if (snapshot.state != RecordingState.Ready) return
         try {
             val session = store.loadLatest() ?: return
-            publish(session.state, session, 0,
-                if (session.state == RecordingState.Completed) COMPLETED_MESSAGE else session.error)
+            val recoveredMessage = when {
+                session.state == RecordingState.Completed -> COMPLETED_MESSAGE
+                session.state == RecordingState.Paused && session.pending == null ->
+                    "Recovered paused session · ${session.retainedCount} confirmed ${if (session.retainedCount == 1) "clip" else "clips"}."
+                else -> session.error
+            }
+            publish(session.state, session, 0, recoveredMessage)
             if (session.state in setOf(RecordingState.Starting, RecordingState.Recording,
                     RecordingState.Finalising, RecordingState.Stopping)) {
                 fail("Recording was interrupted. Confirmed segments and the unfinished file are retained. STOP closes this session.")
+            } else if (session.state == RecordingState.Paused && session.pending != null) {
+                fail("An unfinished recording candidate is retained but was not registered. STOP closes this session.")
             }
         } catch (_: Exception) {
             fail("Session metadata could not be read. Files are retained. STOP acknowledges this error.")

@@ -58,6 +58,8 @@ import com.calvinmazhindu.skitcam.recording.CameraOrientationController
 import com.calvinmazhindu.skitcam.review.PausedEnvironment
 import com.calvinmazhindu.skitcam.review.SegmentReviewController
 import com.calvinmazhindu.skitcam.review.ThumbnailLoader
+import com.calvinmazhindu.skitcam.playback.SkitPlaybackController
+import com.calvinmazhindu.skitcam.playback.SkitPlaybackScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.calvinmazhindu.skitcam.arrange.ArrangementViewModel
 import com.calvinmazhindu.skitcam.arrange.ArrangementScreen
@@ -76,9 +78,11 @@ class MainActivity : ComponentActivity() {
     val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
     val arrangementModel: ArrangementViewModel by lazy { ViewModelProvider(this)[ArrangementViewModel::class.java] }
     val orientation: CameraOrientationController by lazy { CameraOrientationController(this) }
+    val playback: SkitPlaybackController by lazy { SkitPlaybackController(applicationContext) }
     private val beforeCapture: (Int) -> Unit = { degrees ->
         orientation.beforeCapture(degrees)
         check(cameraModel.previewDisplayRotation==orientation.displayRotation) { "Wait for the rotated camera preview before recording." }
+        playback.close()
         reviewController.close()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,6 +115,7 @@ class MainActivity : ComponentActivity() {
         recordingModel.cameraReady = false
         recordingModel.audio.foreground(false)
         arrangementModel.cancelDrag()
+        playback.close()
         reviewController.close()
         recordingModel.background()
         super.onPause()
@@ -118,6 +123,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         orientation.stop()
         if(recordingModel.port.beforeStart===beforeCapture) recordingModel.port.beforeStart=null
+        playback.close()
         reviewController.close()
         super.onDestroy()
     }
@@ -142,6 +148,13 @@ internal fun MainActivity.CameraScreen() {
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
     val camera = cameraModel
+    val playback = this@CameraScreen.playback
+    LaunchedEffect(snapshot.state, playback.active) {
+        if (snapshot.state != RecordingState.Paused) playback.close()
+    }
+    LaunchedEffect(snapshot.session, playback.active) {
+        if (playback.active) playback.validate(snapshot.session)
+    }
     camera.video.canEdit = { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.canChange(recordingModel.snapshots.value,recordingModel.commandPending.value,ExportJournal.busy) && recordingModel.recovered.value && camera.choice.mode==CameraMode.SkitVideo && camera.streaming && !camera.switching && !photoModel.busy }
     camera.video.beforeChange = { recordingModel.cameraReady = false }
     val photos = photoModel
@@ -343,13 +356,20 @@ internal fun MainActivity.CameraScreen() {
         if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
-            PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
-                onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = Modifier.fillMaxSize()
-                    .padding(top = top, bottom = if (landscape) 0.dp else bottom,
-                        end = if (landscape) dockWidth else 0.dp)
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(
-                        if (landscape) WindowInsetsSides.Start + WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal))
-                    .padding(8.dp))
+            val pausedModifier = Modifier.fillMaxSize()
+                .padding(top = top, bottom = if (landscape) 0.dp else bottom,
+                    end = if (landscape) dockWidth else 0.dp)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(
+                    if (landscape) WindowInsetsSides.Start + WindowInsetsSides.Bottom else WindowInsetsSides.Horizontal))
+                .padding(8.dp)
+            if (playback.active) {
+                SkitPlaybackScreen(playback, pausedModifier) { playback.close() }
+            } else {
+                PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
+                    onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = pausedModifier,
+                    onPlayFromBeginning = { snapshot.session?.let { review.close(); playback.play(it) } },
+                    onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } })
+            }
         }
         Column(
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
@@ -400,8 +420,8 @@ internal fun MainActivity.CameraScreen() {
                 showShortcuts = true, verticalShutter = landscape,
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
-                beforeRecording = { camera.dismissSavedNotice();trimModel.close();review.close();arrangement.invalidate() },
-                onBackground = { review.close() },
+                beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close();arrangement.invalidate() },
+                onBackground = { playback.close(); review.close() },
                 onArrange = {
                     val current = recordingModel.snapshots.value
                     if (current.state == RecordingState.Paused && current.count >= 2 && !current.unresolved) {

@@ -107,7 +107,7 @@ class PauseEnvironmentDeviceTest {
         }
     }
     private fun assertReviewActionsVisible() {
-        for (label in listOf("Keep", "Discard", "Close")) {
+        for (label in listOf("Discard", "Trim", "Close")) {
             await("$label visible") { node { it.text?.toString() == label } != null }
             var target = node { it.text?.toString() == label }!!
             while (!target.isClickable && target.parent != null) target = target.parent
@@ -168,7 +168,7 @@ class PauseEnvironmentDeviceTest {
         await("discard saved") { model.snapshots.value.count == 0 }
         assertEquals(0L, model.snapshots.value.durationMs)
         assertEquals(bytes, File(first.path).length())
-        click { it.text?.toString() == "Keep" }
+        click { it.text?.toString() == "Restore" }
         await("keep restored") { model.snapshots.value.count == 1 }
         screenshot("portrait-review")
         click { it.text?.toString() == "Close" }

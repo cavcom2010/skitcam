@@ -14,6 +14,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
+import com.calvinmazhindu.skitcam.recording.SegmentEditResult
 import java.io.File
 
 data class ReviewSelection(val sessionId: String, val segmentId: String)
@@ -31,6 +32,8 @@ class SegmentReviewController(context: Context) {
     var feedback by mutableStateOf<String?>(null)
         private set
     var saving by mutableStateOf(false)
+        private set
+    var pendingSegmentId by mutableStateOf<String?>(null)
         private set
     var playbackLabel by mutableStateOf("Ready to play")
         private set
@@ -93,14 +96,23 @@ class SegmentReviewController(context: Context) {
     }
     fun decide(model: RecordingViewModel, kept: Boolean) {
         val selected = selection ?: return
+        decideById(model, selected.sessionId, selected.segmentId, kept)
+    }
+
+    /** Shared atomic decision path used by both review and direct shelf actions. */
+    fun decideById(model: RecordingViewModel, sessionId: String, segmentId: String, kept: Boolean,
+        finished: (SegmentEditResult) -> Unit = {}) {
         if (saving) return
         val token = generation
         saving = true
+        pendingSegmentId = segmentId
         feedback = null
-        model.setSegmentKept(selected.sessionId, selected.segmentId, kept) { result ->
-            if (generation == token && selection == selected) {
+        model.setSegmentKept(sessionId, segmentId, kept) { result ->
+            if (generation == token) {
                 saving = false
+                pendingSegmentId = null
                 feedback = result.message ?: if (kept) "Kept" else "Discarded · original file retained"
+                finished(result)
             }
         }
     }
@@ -116,6 +128,7 @@ class SegmentReviewController(context: Context) {
         error = null
         feedback = null
         saving = false
+        pendingSegmentId = null
         playbackLabel = "Ready to play"
     }
 }

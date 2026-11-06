@@ -56,6 +56,11 @@ class RecordingDeviceTest {
     }
     private fun state(state: RecordingState) = await(state.name) { model.snapshots.value.state == state }
     private fun start() {
+        await("stable pose before start") {
+            var zero = false
+            scenario.onActivity { zero = it.orientation.pose == 0 }
+            zero
+        }
         // Exercise the engine with a known pose; sensor filtering is independently tested.
         scenario.onActivity { model.start(0) }
         state(RecordingState.Recording)
@@ -101,6 +106,11 @@ class RecordingDeviceTest {
         assertEquals(1, model.snapshots.value.count)
         scenario.moveToState(Lifecycle.State.RESUMED)
         await("preview recovered") { model.cameraReady }
+        await("stable pose after background") {
+            var zero = false
+            scenario.onActivity { zero = it.orientation.pose == 0 }
+            zero
+        }
         model.resume(0); state(RecordingState.Recording)
         await("resumed media") { model.snapshots.value.activeDurationMs >= 1200 }
         model.stop(); state(RecordingState.Completed)

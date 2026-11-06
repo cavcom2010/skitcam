@@ -324,18 +324,29 @@ Thumbnails load lazily off the main thread, with one extraction at a time and a
 2 MiB memory cache. Pending recordings and failed candidates are never shown.
 
 Tap a thumbnail to open review. Playback starts paused: use Play and the seek
-bar to review video with sound. Keep/Discard saves the decision immediately and
-leaves review open. Close or Back releases playback without changing the decision.
-Review is optional; RESUME releases playback and audio focus before recording.
-Backgrounding or recreating the activity closes review. Player selection and
-playback position are not persisted.
+bar to review video with sound. A kept segment shows **Discard**, **Trim** and
+**Close**; a discarded segment shows **Restore**, **Trim** and **Close**. Close
+or Back releases playback without changing the decision. Each shelf card also
+has a **More actions** menu for direct Discard/Restore, with Undo after a
+discard. Review is optional; RESUME releases playback and audio focus before
+recording. Backgrounding or recreating the activity closes review. Player
+selection and playback position are not persisted.
 
-Every successful segment starts as **Keep**. **Discard** excludes it from the
+**Play skit** plays every kept segment in saved playback order without creating
+an MP4. **Play from here** sets that kept segment as the loop anchor; Loop ON
+repeats from that anchor through the last kept segment, while Loop OFF stops at
+the end. Discarded segments are skipped, saved trims are respected, and the
+current clip is shown. Playback never edits session metadata. It closes and
+releases Media3 before RESUME starts a new segment.
+
+Every successful segment starts as **Kept**. **Discard** excludes it from the
 counter and session duration while preserving its MP4. Discarded items remain
-labelled in the strip and can be restored with Keep, subject to the 100-kept
-limit. Missing/corrupt media displays a placeholder or playback error without
-silently changing its status. Decisions are accepted only while Paused and
-published after atomic persistence.
+labelled in the strip and can be restored, subject to the 100-kept limit.
+Missing/corrupt media displays a placeholder or playback error without silently
+changing its status. Decisions are accepted only while Paused and published
+after atomic persistence. See
+[VALIDATION_M12A.md](VALIDATION_M12A.md) for shelf actions, loop-anchor
+semantics, 20-clip measurements, process/reboot recovery and preservation results.
 
 ## Arrangement
 

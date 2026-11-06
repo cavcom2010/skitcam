@@ -33,7 +33,32 @@ class SessionFileStore(private val root: File) : SessionStore {
         val metadata = root.listFiles().orEmpty().filter { it.isDirectory }
             .map { File(it, "session.json") }.filter { it.exists() || File(it.path + ".bak").exists() }
             .maxByOrNull { maxOf(it.lastModified(), File(it.path + ".bak").lastModified()) } ?: return null
-        return AtomicFile(metadata).openRead().bufferedReader().use { SessionCodec.decode(it.readText()) }
+        return readMetadata(metadata)
+    }
+
+    /**
+     * Read the committed base before a legacy backup. AtomicFile.openRead() can rename a
+     * stale .bak over a newer valid base, so recovery must not use it for selection.
+     * A base that exists but cannot decode is still a hard failure unless its backup is valid.
+     */
+    private fun readMetadata(metadata: File): Session {
+        var baseFailure: Exception? = null
+        if (metadata.exists()) {
+            try {
+                return metadata.bufferedReader().use { SessionCodec.decode(it.readText()) }
+            } catch (exception: Exception) {
+                baseFailure = exception
+            }
+        }
+        val backup = File(metadata.path + ".bak")
+        if (backup.exists()) {
+            return try {
+                backup.bufferedReader().use { SessionCodec.decode(it.readText()) }
+            } catch (exception: Exception) {
+                throw baseFailure ?: exception
+            }
+        }
+        throw baseFailure ?: IllegalStateException("Session metadata is missing.")
     }
     override fun sourceFacts(path: String): SourceFacts {
         val file = File(path)

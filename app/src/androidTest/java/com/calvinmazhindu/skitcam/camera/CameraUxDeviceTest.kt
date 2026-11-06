@@ -238,13 +238,13 @@ class CameraUxDeviceTest {
         assertTrue("Thumbnail must stay above dock",thumb.bottom<=resume.top)
         shot("immersive-paused-portrait")
         click("Review segment 1,",prefix=true)
-        await("review visible") { find("Trim")!=null && find("Keep")!=null && find("Discard")!=null }
+        await("review visible") { find("Trim")!=null && find("Discard")!=null && find("Close")!=null && find("Keep")==null }
         await("review player ready: ${activity.reviewController.error}") {
             var ready=false
             inst.runOnMainSync { ready=activity.reviewController.player?.playbackState==androidx.media3.common.Player.STATE_READY }
             ready
         }
-        for(label in listOf("Trim","Keep","Discard","Close")) {
+        for(label in listOf("Trim","Discard","Close")) {
             val r=target(label)
             assertFalse("$label collides with RESUME",android.graphics.Rect.intersects(r,resume))
         }
