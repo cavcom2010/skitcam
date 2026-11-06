@@ -24,7 +24,8 @@
         <service android:name=".export.ExportService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
         <activity android:name=".gallery.SavedMediaActivity" android:exported="false" />
         <activity android:name=".export.FinishedPlaybackActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:screenOrientation="fullSensor" android:configChanges="orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="${launcherCategory}" />

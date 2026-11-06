@@ -23,6 +23,7 @@ class OrientationTracker(context: Context, private val changed: (Int?) -> Unit) 
     private val filter = OrientationFilter()
     private val handler = Handler(Looper.getMainLooper())
     private var last = ORIENTATION_UNKNOWN
+    val rawDegrees get() = last
     private val stable = Runnable { changed(filter.update(last, SystemClock.elapsedRealtime())) }
     override fun onOrientationChanged(orientation: Int) {
         last = orientation

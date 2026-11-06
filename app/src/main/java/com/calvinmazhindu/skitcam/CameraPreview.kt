@@ -38,7 +38,7 @@ import com.calvinmazhindu.skitcam.recording.*
 @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 @Composable
 internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, photos: PhotoModel,
-    gesturesEnabled: Boolean, modifier: Modifier = Modifier) {
+    displayRotation: Int, gesturesEnabled: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val choice = cameraModel.choice
@@ -52,6 +52,8 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
     } }
     var attempt by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
+    val currentRotation by rememberUpdatedState(displayRotation)
+    var rotateBinding by remember(view) { mutableStateOf<((Int) -> Unit)?>(null) }
     DisposableEffect(lifecycleOwner, view, choice, attempt, videoRevision) {
         var disposed = false
         var provider: ProcessCameraProvider? = null
@@ -100,7 +102,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                 cameraModel.hasOtherLens = cameraProvider.hasCamera(if(choice.lens == CameraLens.Rear) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA)
                 view.scaleType = PreviewView.ScaleType.FIT_CENTER
                 fun bind(highResolution: Boolean): Camera {
-                    val builder=Preview.Builder()
+                    val builder=Preview.Builder().setTargetRotation(currentRotation)
                     val snapshot=model.snapshots.value
                     val open=snapshot.session?.takeIf { snapshot.openSession }
                     val cameraInfo=cameraProvider.getCameraInfo(selector)
@@ -125,6 +127,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                     if(!photo) {
                         var capture=model.port.prepare(checkNotNull(requested))
                         if(!cameraModel.video.configuration(cameraInfo,useCase,capture)) capture=model.port.prepare(cameraModel.video.settings)
+                        capture.targetRotation=open?.let { CameraRecordingPort.rotationFor(it.orientationDegrees) } ?: currentRotation
                         videoCapture=capture
                         val bound=cameraProvider.bindToLifecycle(lifecycleOwner,selector,useCase,capture)
                         val size=checkNotNull(capture.resolutionInfo).resolution
@@ -145,10 +148,10 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                         .build()
                     val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                         .setJpegQuality(100).setResolutionSelector(resolution)
-                        .setTargetRotation(view.display?.rotation ?: android.view.Surface.ROTATION_0).build()
+                        .setTargetRotation(currentRotation).build()
                     image = capture
                     val group = UseCaseGroup.Builder().addUseCase(useCase).addUseCase(capture)
-                        .setViewPort(ViewPort.Builder(Rational(if(landscape) 4 else 3,if(landscape) 3 else 4),view.display?.rotation ?: android.view.Surface.ROTATION_0).setScaleType(ViewPort.FIT).build()).build()
+                        .setViewPort(ViewPort.Builder(Rational(if(landscape) 4 else 3,if(landscape) 3 else 4),currentRotation).setScaleType(ViewPort.FIT).build()).build()
                     return cameraProvider.bindToLifecycle(lifecycleOwner,selector,group)
                 }
                 val camera = try { bind(true) } catch(first: Exception) {
@@ -162,6 +165,18 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                 cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · ${cameraModel.video.settings.fps?.let { "$it fps target" } ?: "Auto FPS"}", resolution?.resolution?.let { BoundCameraInfo(it.width,it.height,photo,if(photo) null else cameraModel.video.settings.fps) },resolution?.rotationDegrees ?: 0) { failure ->
                     if(!disposed) {
                         if(failure!=null) { error=failure;cameraModel.failed(failure) }
+                        updateReadiness()
+                    }
+                }
+                cameraModel.rotated(camera.cameraInfo.getSensorRotationDegrees(currentRotation),currentRotation)
+                rotateBinding = { rotation ->
+                    // Keep the same camera/control/use-case instances on display rotation.
+                    // An open session owns every target rotation until STOP/export completes.
+                    if(!disposed && !model.snapshots.value.openSession) {
+                        if(preview?.targetRotation!=rotation) preview?.targetRotation=rotation
+                        if(!photos.busy && image?.targetRotation!=rotation) image?.targetRotation=rotation
+                        if(videoCapture?.targetRotation!=rotation) videoCapture?.targetRotation=rotation
+                        cameraModel.rotated(camera.cameraInfo.getSensorRotationDegrees(rotation),rotation)
                         updateReadiness()
                     }
                 }
@@ -190,6 +205,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             disposed = true; bound = false
+            rotateBinding=null
             model.cameraReady = false
             if(!photo) model.background()
             lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
@@ -202,6 +218,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
             cameraModel.released()
         }
     }
+    LaunchedEffect(displayRotation,rotateBinding,photos.busy) { rotateBinding?.invoke(displayRotation) }
     LaunchedEffect(cameraModel.video.pending,cameraModel.video.whiteBalanceStatus,cameraModel.streaming,cameraModel.zoomReady) {
         if(!photo && cameraModel.streaming) model.cameraReady=cameraModel.zoomReady && cameraModel.video.ready && model.port.profile!=null &&
             lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)

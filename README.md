@@ -1,6 +1,13 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Version **0.11.2** lets the camera screen follow the phone's physical orientation
+in Skit Video and Photo even when Android Auto-rotate is off, while an active
+recording stays locked to the orientation it started in. Landscape video also
+uses the full safe height behind the gradient toolbar and mode buttons, removing
+the previous narrow central band. See
+[VALIDATION_CAMERA_ROTATION.md](VALIDATION_CAMERA_ROTATION.md) for the root cause,
+measured geometry, preview-versus-MP4 comparisons and limits.
 Version **0.11.1** gives portrait Skit Video a full-width, aspect-correct viewfinder
 where safe-area geometry permits, extending beneath the gradient-backed controls.
 Default 1.0× zoom, recording profiles and Photo layout are preserved. See

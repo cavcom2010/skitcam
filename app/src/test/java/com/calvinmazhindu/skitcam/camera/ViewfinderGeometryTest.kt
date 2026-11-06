@@ -40,6 +40,15 @@ class ViewfinderGeometryTest {
         assertEquals(1700f,result.height,0f)
         assertEquals(9f/16f,result.width/result.height,.0001f)
     }
+    @Test fun landscapeVideoUsesSafeHeightBehindToolbarAndModeControls() {
+        val old=ViewfinderGeometry.fit(1783f,750f,16f/9f)!!
+        val expanded=ViewfinderGeometry.fit(1783f,1010f,16f/9f)!!
+        assertTrue(expanded.width>old.width && expanded.height>old.height)
+        assertEquals(1783f,expanded.width,.01f)
+        assertEquals(1002.9375f,expanded.height,.01f)
+        assertEquals(16f/9f,expanded.width/expanded.height,.0001f)
+        assertTrue(expanded.height<=1010f)
+    }
     @Test fun geometryHandlesSmallWindowsAndPhotoAspect() {
         for(aspect in listOf(3f/4f,4f/3f,9f/16f,16f/9f)) for(width in listOf(300f,1080f,2400f)) {
             val result=ViewfinderGeometry.fit(width,700f,aspect)!!

@@ -4,12 +4,9 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import android.Manifest
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.net.Uri
 import android.provider.Settings
-import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,12 +30,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, cameraGranted: Boolean,
+fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, orientation: CameraOrientationController,
+    previewRotation: Int?, cameraGranted: Boolean,
     showShortcuts: Boolean = false, verticalShutter: Boolean = false, leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
     beforeRecording: () -> Unit = {}, onArrange: () -> Unit = {}, onBackground: () -> Unit = beforeRecording) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
-    var pose by remember { mutableStateOf<Int?>(null) }
+    val commandPending by model.commandPending.collectAsStateWithLifecycle()
+    val pose = orientation.pose
     val releaseReview by rememberUpdatedState(beforeRecording)
     val releaseOnBackground by rememberUpdatedState(onBackground)
     fun audioGranted() = ContextCompat.checkSelfPermission(activity,
@@ -52,43 +51,24 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         rationale = activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
     }
     DisposableEffect(activity, model) {
-        val tracker = OrientationTracker(activity) { pose = it }
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     microphone = audioGranted()
                     rationale = activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)
-                    if (tracker.canDetectOrientation()) tracker.enable()
-                    else pose = null
                 }
                 Lifecycle.Event.ON_PAUSE -> {
                     releaseOnBackground()
-                    tracker.stop()
                     model.cameraReady = false
                 }
                 else -> Unit
             }
         }
-        val beforeStart: (Int) -> Unit = { degrees ->
-            releaseReview()
-            check(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                "Camera screen left the foreground before recording started."
-            }
-            activity.lockRecordingOrientation(degrees)
-        }
-        model.port.beforeStart = beforeStart
         activity.lifecycle.addObserver(observer)
-        if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) tracker.enable()
         onDispose {
-            tracker.stop()
             activity.lifecycle.removeObserver(observer)
-            if (model.port.beforeStart === beforeStart) model.port.beforeStart = null
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
-    }
-    LaunchedEffect(snapshot.openSession, snapshot.session?.orientationDegrees) {
-        if (snapshot.openSession) activity.lockRecordingOrientation(snapshot.session!!.orientationDegrees)
-        else activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
     LaunchedEffect(snapshot.state) {
         if (snapshot.state in setOf(RecordingState.Starting, RecordingState.Recording,
@@ -98,10 +78,9 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
     }
     val desiredPose = snapshot.session?.takeIf { snapshot.openSession }?.orientationDegrees
     val poseCorrect = pose != null && (desiredPose == null || pose == desiredPose)
-    @Suppress("DEPRECATION")
-    val matchesPreview = pose != null && CameraRecordingPort.rotationFor(pose!!) == activity.windowManager.defaultDisplay.rotation
-    val canStart = cameraGranted && cameraReady && poseCorrect && matchesPreview
-    val canResume = cameraGranted && cameraReady && poseCorrect && snapshot.count < RecordingEngine.MAX_SEGMENTS
+    val matchesPreview = CameraOrientationPolicy.matchesDisplay(pose,orientation.displayRotation) && previewRotation==orientation.displayRotation
+    val canStart = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending
+    val canResume = cameraGranted && cameraReady && poseCorrect && matchesPreview && snapshot.count < RecordingEngine.MAX_SEGMENTS
     val requestAudio = {
         if (requested && !rationale) {
             activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -130,7 +109,11 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         }
         when (snapshot.state) {
             RecordingState.Ready, RecordingState.Completed -> {
-                @Composable fun IdleShutter() { Shutter(canStart,"Start recording",CameraIcon.Record) { releaseReview();if(microphone) model.start(pose) else requestAudio() } }
+                @Composable fun IdleShutter() { Shutter(canStart,"Start recording",CameraIcon.Record) {
+                    releaseReview()
+                    if(!microphone) requestAudio()
+                    else pose?.let { if(orientation.lockForStart(it)) model.start(it) }
+                } }
                 if(verticalShutter) Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
                     leading();IdleShutter();trailing()
                 } else Row(Modifier.fillMaxWidth(),horizontalArrangement=if(showShortcuts) Arrangement.SpaceBetween else Arrangement.Center,
@@ -165,23 +148,5 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, ca
         }
         if (warning != null) Text(warning, color = Color(0xFFF2D4BC),
             style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-    }
-}
-
-@Suppress("DEPRECATION")
-private fun ComponentActivity.lockRecordingOrientation(degrees: Int) {
-    val rotation = windowManager.defaultDisplay.rotation
-    val portrait = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-    val naturalPortrait = if (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_180) portrait else !portrait
-    requestedOrientation = if (naturalPortrait) when (degrees) {
-        90 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-        180 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
-        270 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        else -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-    } else when (degrees) {
-        90 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        180 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-        270 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
-        else -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
     }
 }

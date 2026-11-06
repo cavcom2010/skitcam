@@ -26,12 +26,13 @@ class AudioDeviceTest {
     @Test fun builtinDiscoveryLevelPauseResumeAndExport() {
         val pkg=instrumentation.targetContext.packageName
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant $pkg $p")
-        val rotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
+        val rotation=shell("wm user-rotation")
         val scenario=ActivityScenario.launch(MainActivity::class.java)
         lateinit var model: RecordingViewModel
+        lateinit var activity: MainActivity
         var owned: String?=null
         try {
-            scenario.onActivity { model=it.recordingModel }
+            scenario.onActivity { activity=it;model=it.recordingModel }
             await("session recovery") { model.recovered.value }
             Assume.assumeTrue("Preserve user recording",!ExportJournal.busy && model.snapshots.value.state in setOf(RecordingState.Ready,RecordingState.Completed))
             ExportTestSupport.beforeCamera()
@@ -39,7 +40,7 @@ class AudioDeviceTest {
             scenario.onActivity { camera=it.cameraModel }
             await("camera stream") { camera.streaming }
             scenario.onActivity { camera.select(CameraMode.SkitVideo,CameraLens.Rear,true) }
-            await("video camera") { model.cameraReady && camera.streaming && !camera.switching && camera.choice.mode==CameraMode.SkitVideo }
+            await("video camera") { model.cameraReady && camera.streaming && !camera.switching && camera.choice.mode==CameraMode.SkitVideo && activity.orientation.pose==0 }
             await("built-in microphone discovery") { model.audio.state.value.inputs.any { it.kind==InputKind.BuiltIn } }
             model.start(0);await("recording") { model.snapshots.value.state==RecordingState.Recording }
             owned=model.snapshots.value.session!!.id
@@ -53,8 +54,8 @@ class AudioDeviceTest {
             await("samples") { model.snapshots.value.activeDurationMs>=1500 };model.pause()
             await("paused") { model.snapshots.value.state==RecordingState.Paused }
             await("meter released") { model.audio.state.value.health==CaptureHealth.Idle && model.audio.state.value.peak==null }
-            scenario.recreate();scenario.onActivity { model=it.recordingModel }
-            await("camera after recreation") { model.cameraReady }
+            scenario.recreate();scenario.onActivity { activity=it;model=it.recordingModel }
+            await("camera after recreation") { model.cameraReady && activity.orientation.pose==0 }
             model.resume(0);await("resumed") { model.snapshots.value.state==RecordingState.Recording }
             await("resumed audio") { model.audio.state.value.health==CaptureHealth.Active && model.snapshots.value.activeDurationMs>=1500 }
             model.stop();await("recording complete") { model.snapshots.value.state==RecordingState.Completed }
@@ -63,7 +64,7 @@ class AudioDeviceTest {
             assertEquals(2,model.snapshots.value.count)
         } finally {
             if(owned!=null && model.snapshots.value.session?.id==owned && model.snapshots.value.state in setOf(RecordingState.Recording,RecordingState.Paused)) model.stop()
-            ExportTestSupport.settle();scenario.close();shell("wm user-rotation $rotation")
+            ExportTestSupport.settle();scenario.close();assertEquals("Audio test must not change global rotation",rotation,shell("wm user-rotation"))
         }
     }
 }

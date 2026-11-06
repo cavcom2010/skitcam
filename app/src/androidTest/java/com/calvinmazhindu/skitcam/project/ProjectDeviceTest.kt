@@ -72,7 +72,7 @@ class ProjectDeviceTest {
             check(!a.recordingModel.snapshots.value.openSession)
             inst.runOnMainSync { a.cameraModel.select(com.calvinmazhindu.skitcam.camera.CameraMode.SkitVideo,CameraLens.Rear,true) }
             val m=a.recordingModel
-            await("ready") { m.cameraReady }
+            await("ready") { m.cameraReady && a.orientation.pose==0 }
             repeat(3) { i ->
                 inst.runOnMainSync { if(i==0) m.start(0) else m.resume(0) }
                 await("recording") { m.snapshots.value.state==RecordingState.Recording && m.snapshots.value.activeDurationMs>=1700 }
@@ -96,7 +96,7 @@ class ProjectDeviceTest {
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
     }
     @Test fun systemPickerCreatesVerifiedPortableProjectAndCameraStillRecords() {
-        val old=shell("wm user-rotation");shell("wm user-rotation lock 0")
+        val old=shell("wm user-rotation")
         try {
             val (s,raw)=recordFixture()
             val metadata=File(context.filesDir,"sessions/${s.id}/session.json").readBytes()
@@ -146,14 +146,14 @@ class ProjectDeviceTest {
             val camera=ActivityScenario.launch(MainActivity::class.java)
             try {
                 lateinit var a: MainActivity;camera.onActivity { a=it }
-                await("camera after project") { a.recordingModel.cameraReady }
+                await("camera after project") { a.recordingModel.cameraReady && a.orientation.pose==0 }
                 inst.runOnMainSync { a.recordingModel.start(0) }
                 await("new real recording after project") { a.recordingModel.snapshots.value.state==RecordingState.Recording && a.recordingModel.snapshots.value.activeDurationMs>=1500 }
                 a.recordingModel.stop()
                 await("new export",180) { a.recordingModel.snapshots.value.state==RecordingState.Completed && ExportJournal.status.value?.state==ExportState.Completed && a.recordingModel.cameraReady }
                 assertNotEquals(s.id,a.recordingModel.snapshots.value.session!!.id)
             } finally { camera.close() }
-        } finally { shell("wm user-rotation $old") }
+        } finally { assertEquals("Project test must not change global rotation",old,shell("wm user-rotation")) }
     }
     @Test fun videoOptionsOpenOptionalProjectAndDraftSurvivesRecreation() {
         val (_,raw)=recordFixture();val snapshot=ProjectSnapshot.fromJournal(raw)

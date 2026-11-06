@@ -34,13 +34,16 @@ class PhotoModel(application: Application) : AndroidViewModel(application) {
     var countdown by mutableIntStateOf(0); private set
     private var timerJob: Job? = null
     fun take(seconds: Int, rotation: Int) {
+        take(seconds) { rotation }
+    }
+    fun take(seconds: Int, rotation: () -> Int) {
         if(busy || !recovered) return
         val useCase = capture ?: return
         runtime.message = null;runtime.lastSaveSucceeded=false
         timerJob = viewModelScope.launch {
             for (remaining in seconds downTo 1) { countdown = remaining; delay(1000) }
             countdown = 0
-            if(capture === useCase) runtime.take(useCase,rotation)
+            if(capture === useCase) runtime.take(useCase,rotation())
         }
     }
     fun cancelTimer() { timerJob?.cancel(); timerJob = null; countdown = 0 }

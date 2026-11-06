@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.os.Build
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -50,6 +52,7 @@ import androidx.lifecycle.ViewModelProvider
 import com.calvinmazhindu.skitcam.recording.RecordingControls
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.RecordingState
+import com.calvinmazhindu.skitcam.recording.CameraOrientationController
 import com.calvinmazhindu.skitcam.review.PausedEnvironment
 import com.calvinmazhindu.skitcam.review.SegmentReviewController
 import com.calvinmazhindu.skitcam.review.ThumbnailLoader
@@ -70,8 +73,15 @@ class MainActivity : ComponentActivity() {
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
     val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
     val arrangementModel: ArrangementViewModel by lazy { ViewModelProvider(this)[ArrangementViewModel::class.java] }
+    val orientation: CameraOrientationController by lazy { CameraOrientationController(this) }
+    private val beforeCapture: (Int) -> Unit = { degrees ->
+        orientation.beforeCapture(degrees)
+        check(cameraModel.previewDisplayRotation==orientation.displayRotation) { "Wait for the rotated camera preview before recording." }
+        reviewController.close()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        recordingModel.port.beforeStart=beforeCapture
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
@@ -84,9 +94,15 @@ class MainActivity : ComponentActivity() {
     }
     override fun onResume() {
         super.onResume()
+        orientation.start()
         recordingModel.audio.foreground(true)
     }
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        orientation.refreshDisplay()
+    }
     override fun onPause() {
+        orientation.stop()
         photoModel.cancelTimer()
         cameraModel.video.background()
         cameraModel.idle()
@@ -98,17 +114,22 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
     override fun onDestroy() {
+        orientation.stop()
+        if(recordingModel.port.beforeStart===beforeCapture) recordingModel.port.beforeStart=null
         reviewController.close()
         super.onDestroy()
     }
 }
 
 @Composable
-private fun MainActivity.CameraScreen() {
+internal fun MainActivity.CameraScreen() {
     val density = LocalDensity.current
-    val dockWidth = if(density.fontScale>1.5f) 192.dp else 152.dp
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
+    // Insets belong outside the usable dock width; a landscape navigation bar must
+    // not squeeze RESUME/STOP down to a few characters per line.
+    val dockWidth = (if(density.fontScale>1.5f) 192.dp else 152.dp) +
+        if(landscape) WindowInsets.safeDrawing.asPaddingValues().calculateEndPadding(LocalLayoutDirection.current) else 0.dp
     val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
     val review = reviewController
     val arrangement = arrangementModel
@@ -125,6 +146,8 @@ private fun MainActivity.CameraScreen() {
     val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
     val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
+    // This owner survives Photo/Video control changes and the finishing overlay.
+    SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
     val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
         snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed,RecordingState.Paused)
     LaunchedEffect(camera.loaded, recovered) {
@@ -174,6 +197,7 @@ private fun MainActivity.CameraScreen() {
     }
     val photo = camera.choice.mode == CameraMode.Photo
     val immersiveVideo = !photo && !landscape
+    val landscapeVideo = !photo && landscape
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
@@ -197,8 +221,7 @@ private fun MainActivity.CameraScreen() {
             legacyStorage.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE))
             return
         }
-        @Suppress("DEPRECATION") val rotation = windowManager.defaultDisplay.rotation
-        photos.take(camera.timer,rotation)
+        photos.take(camera.timer) { orientation.displayRotation }
     }
     fun openMedia() {
         if(!CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
@@ -256,16 +279,19 @@ private fun MainActivity.CameraScreen() {
     }
 
     Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
-        if(!recovered || !camera.ready || !photos.recovered) {
+        if(!recovered || !camera.ready || !photos.recovered || (!orientation.ready && !camera.streaming)) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
             // Portrait video uses the space beneath the dock too. Keep the complete fitted
             // recording frame; dock height still reserves space for review/editing below.
-            CameraPreview(recordingModel,camera,photos,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
-                top=with(density) { headerHeight.toDp() },bottom=if(landscape) 56.dp else if(immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
+            CameraPreview(recordingModel,camera,photos,displayRotation=orientation.displayRotation,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
+                top=if(landscapeVideo) 0.dp else with(density) { headerHeight.toDp() },
+                bottom=if(landscapeVideo) 0.dp else if(landscape) 56.dp else if(immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
                 end=if(landscape) dockWidth else 0.dp)
                 .then(if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)) else Modifier))
+                    WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                else if(landscapeVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
+                    WindowInsetsSides.Start + WindowInsetsSides.Vertical)) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -284,6 +310,7 @@ private fun MainActivity.CameraScreen() {
             )
         }
         if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
+            .then(if(landscapeVideo) Modifier.blockPreviewInput() else Modifier)
             .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
             Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) (dockWidth+8.dp) else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
                 horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
@@ -314,13 +341,7 @@ private fun MainActivity.CameraScreen() {
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
-                .then(if(immersiveVideo) Modifier.pointerInput(Unit) {
-                    // The dock overlays the image. Its empty spaces must not focus/pinch
-                    // the camera underneath; children handle their own input first.
-                    awaitPointerEventScope {
-                        while(true) awaitPointerEvent(PointerEventPass.Final).changes.forEach { it.consume() }
-                    }
-                } else Modifier)
+                .then(if(immersiveVideo) Modifier.blockPreviewInput() else Modifier)
                 .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
@@ -361,7 +382,7 @@ private fun MainActivity.CameraScreen() {
                     if(photos.busy && photos.countdown==0) Text("Saving photo…",style=MaterialTheme.typography.labelSmall)
                     if(photos.canRetry) TextButton(onClick=photos::retry) { Text("Retry Save") }
                 } else {
-                    RecordingControls(this@CameraScreen, recordingModel, cameraGranted = granted && !camera.switching,
+                    RecordingControls(this@CameraScreen, recordingModel, orientation, previewRotation=camera.previewDisplayRotation, cameraGranted = granted && !camera.switching,
                 showShortcuts = true, verticalShutter = landscape,
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
@@ -388,7 +409,10 @@ private fun MainActivity.CameraScreen() {
         }
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
         if(!snapshot.openSession && landscape && !finishing && !settings && !quick && camera.ready) Row(Modifier.align(Alignment.BottomStart)
-            .fillMaxWidth().padding(end=(dockWidth+8.dp)).safeDrawingPadding().padding(8.dp),horizontalArrangement=Arrangement.Center) {
+            .fillMaxWidth().padding(end=(dockWidth+8.dp))
+            .then(if(landscapeVideo) Modifier.background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.65f))))
+                .blockPreviewInput() else Modifier)
+            .safeDrawingPadding().padding(8.dp),horizontalArrangement=Arrangement.Center) {
             listOf(CameraMode.Photo to "Photo",CameraMode.SkitVideo to "Skit Video").forEach { (mode,label) ->
                 FilterChip(selected=camera.choice.mode==mode,onClick={selectCamera(mode)},enabled=maySwitch,label={Text(label,maxLines=1)})
                 Spacer(Modifier.width(8.dp))
@@ -401,6 +425,13 @@ private fun MainActivity.CameraScreen() {
             Snackbar(data,containerColor=Color(0xFF292429),contentColor=Color.White,
                 actionColor=Color(0xFFFFBDC3),dismissActionContentColor=Color.LightGray)
         }
+    }
+}
+
+/** Overlay gaps intercept camera gestures; child controls handle input first. */
+private fun Modifier.blockPreviewInput() = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while(true) awaitPointerEvent(PointerEventPass.Final).changes.forEach { it.consume() }
     }
 }
 

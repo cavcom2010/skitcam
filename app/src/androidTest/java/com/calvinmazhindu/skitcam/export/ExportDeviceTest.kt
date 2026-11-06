@@ -43,15 +43,16 @@ class ExportDeviceTest {
     }
     @Test fun stopAutomaticallyExportsAndPublishesTwoSegments() {
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
-        val rotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
+        val rotation=shell("wm user-rotation")
         val scenario=ActivityScenario.launch(MainActivity::class.java)
         try {
             lateinit var model: RecordingViewModel
-            scenario.onActivity { it.requestedOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;model=it.recordingModel }
+            lateinit var activity: MainActivity
+            scenario.onActivity { activity=it;model=it.recordingModel }
             Assume.assumeTrue("Preserve any user session or export",!ExportJournal.busy && model.snapshots.value.state in setOf(RecordingState.Ready,RecordingState.Completed))
             // Dismiss only a finished status screen; this never mutates a recording.
             instrumentation.runOnMainSync { ExportJournal.status.value=null }
-            await("camera ready") { model.cameraReady }
+            await("camera ready") { model.cameraReady && activity.orientation.pose==0 }
             model.start(0);await("recording") { model.snapshots.value.state==RecordingState.Recording }
             await("first samples") { model.snapshots.value.activeDurationMs>=1500 };model.pause()
             await("paused") { model.snapshots.value.state==RecordingState.Paused }
@@ -111,7 +112,7 @@ class ExportDeviceTest {
             instrumentation.runOnMainSync { playback!!.finish() }
             clickText("Back to camera")
             await("Camera available after finished actions") { model.cameraReady }
-        } finally { scenario.close();shell("wm user-rotation $rotation") }
+        } finally { scenario.close();assertEquals("Export test must not change global rotation",rotation,shell("wm user-rotation")) }
     }
     @Test fun exportDedicatedSceneFixture() {
         val id=InstrumentationRegistry.getArguments().getString("fixture")

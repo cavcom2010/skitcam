@@ -40,6 +40,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     var zoom by mutableFloatStateOf(1f); private set
     var zoomReady by mutableStateOf(false); private set
     var videoAspect by mutableStateOf<Float?>(null); private set
+    var previewDisplayRotation by mutableStateOf<Int?>(null); private set
     private var zoomChoice: CameraChoice? = null
     private var requestedZoom = 1f
     private var zoomToken = 0
@@ -127,9 +128,14 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (switching) { choice = committed; switching = false }
     }
     fun idle() { streaming = false; focusToken++; focus = null }
+    /** Display-only change on the same binding. Keep zoom, EV, metering and AF hold. */
+    fun rotated(sensorRotation: Int, displayRotation: Int) {
+        videoAspect=boundInfo?.takeUnless { it.photo }?.let { ViewfinderGeometry.aspect(it.width,it.height,sensorRotation) }
+        previewDisplayRotation=displayRotation
+    }
     fun released() {
         camera?.cameraInfo?.zoomState?.removeObserver(zoomObserver)
-        framing.release();video.release();boundInfo=null;videoAspect=null;zoomReady=false
+        framing.release();video.release();boundInfo=null;videoAspect=null;previewDisplayRotation=null;zoomReady=false
         lastMeteringPoint=null;camera=null;generation++;zoomToken++;streaming=false;focus=null
     }
     val observedZoom get() = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
