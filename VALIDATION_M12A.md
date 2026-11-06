@@ -8,12 +8,63 @@ The production package was installed and inspected, but never replaced or used
 for these tests.
 
 Branch: **`feature/m12a-shelf-loop-recovery`** (already existed and was clean at
-`04f5727`). No `AGENTS.md` is present. No commit, push, merge or version bump was
-made.
-
-Validation APK SHA-256:
+`04f5727`). No `AGENTS.md` is present. M12A was validated at version 0.11.2 /
+code 15 with validation APK
 `b3b0bf2ea89c8644afe5050b3bf50c3f3abef68dd8c812db17c000b8ee9c040f`.
-Version remains 0.11.2 / code 15.
+
+## 0.12.0 local release verification
+
+`main` contained `1611de2` exactly. Release verification was performed on
+`release/0.12.0` with `versionCode = 16` and `versionName = "0.12.0"`. The
+production package and signature were retained.
+
+| Item | Result |
+|---|---|
+| Package | `com.calvinmazhindu.skitcam` |
+| Version | **0.12.0 / 16** |
+| Built APK SHA-256 | `292b165855bbe85c845bab035a343139abb43d37dc1e45352b928971a2d7df1a` |
+| Installed APK SHA-256 | matches built APK |
+| Signing certificate | Android Debug, SHA-256 `bae70b79b460e601507a63349ae6f501ef7ca09c0106a6e2f5b65f8d0eec18a7` |
+| `firstInstallTime` | preserved: 2026-11-01 00:52:17 |
+| Install method | `adb install -r`; no uninstall or data clear |
+
+Installation preserved all 880 pre-existing production session files and all
+public media byte-for-byte.
+
+### Segment 3 loop verification
+
+The production app had no Paused session, so a new five-segment fixture was
+recorded; all 188 pre-existing sessions remained untouched. The real UI action
+**Play from here** was used on Segment 3 with Loop ON.
+
+- Playback plan: **Segment 3 → 4 → 5**.
+- Loop anchor: Segment 3.
+- Observed cycle asserted by instrumentation:
+  **3 → 4 → 5 → 3**.
+- Test result: **OK**, 31.357 s including five short recordings and the loop.
+- Successful fixture: session `fc6747c7-b738-488a-b114-d21dcda61b92` (5 kept).
+- A first verification attempt stopped after a test-only screenshot path error,
+  after it had already created session
+  `2a473ed3-c7ac-4ad1-a885-0d43b4f0ffc9` (5 kept). The corrected test then
+  passed the actual loop assertion.
+- A separate three-segment completed session
+  `f52b3c55-3831-423a-b0bd-c270fed5044f` also appeared during the verification
+  window and was left untouched. It was not part of the loop test.
+
+### Post-release data audit
+
+| Scope | Before release | After verification | Existing changed/missing |
+|---|---:|---:|---:|
+| Production private files | 880 | 902 | **0** |
+| Movies/SkitCam | 439 | 442 | **0** |
+| Pictures/SkitCam | 263 | 263 | **0** |
+
+The 22 new private files and 3 public videos belong to the new verification
+sessions: two five-segment fixtures and the separate three-segment session noted
+above. No existing recording, trim, session JSON or Gallery item was changed or
+removed. Display rotation returned to `free` and Auto-rotate remained enabled.
+
+No commit, push or merge has been made yet.
 
 ## Source audit and preservation baseline
 

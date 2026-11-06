@@ -15,8 +15,8 @@ android {
         targetSdk = 36
         manifestPlaceholders["appLabel"] = if (providers.gradleProperty("validationSuffix").isPresent) "SkitCam validation" else "@string/app_name"
         manifestPlaceholders["launcherCategory"] = if (providers.gradleProperty("validationSuffix").isPresent) "android.intent.category.DEFAULT" else "android.intent.category.LAUNCHER"
-        versionCode = 15
-        versionName = "0.11.2"
+        versionCode = 16
+        versionName = "0.12.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {

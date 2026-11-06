@@ -1,6 +1,11 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+
+Version **0.12.0** adds direct segment shelf Discard/Restore actions with Undo,
+anchored continuous skit playback with Loop, and recovery hardening. See
+[VALIDATION_M12A.md](VALIDATION_M12A.md) for the M12A device validation and the
+0.12.0 local release verification.
 Tap the Photo ratio in the header to choose **1:1, 3:4, 9:16, Full** in portrait
 (or **1:1, 4:3, 16:9, Full** in landscape). Ratios flip with orientation: 3:4
 becomes 4:3 and 9:16 becomes 16:9. Portrait 9:16 uses the full screen width, and
