@@ -49,6 +49,24 @@ class ViewfinderGeometryTest {
         assertEquals(16f/9f,expanded.width/expanded.height,.0001f)
         assertTrue(expanded.height<=1010f)
     }
+    @Test fun landscapePhotoUsesFullSafeHeightWithItsCompleteFourThreeFrame() {
+        val old=ViewfinderGeometry.fit(1783f,750f,4f/3f)!!
+        val expanded=ViewfinderGeometry.fit(1783f,1080f-70f,4f/3f)!!
+        assertEquals(1000f,old.width,.01f)
+        assertEquals(1346.6667f,expanded.width,.01f)
+        assertEquals(1010f,expanded.height,.01f)
+        assertTrue(expanded.width<1783f) // Honest pillarboxing, not a stretched full-width image.
+        assertEquals(4f/3f,expanded.width/expanded.height,.0001f)
+    }
+    @Test fun landscapePhotoKeepsFourThreeWhenInsetsAndDockMakeWidthTheLimit() {
+        for((left,right) in listOf(117f to 120f,120f to 117f)) {
+            val width=1600f-left-right-380f
+            val size=ViewfinderGeometry.fit(width,1010f,4f/3f)!!
+            assertEquals(width,size.width,.01f)
+            assertEquals(width*3f/4f,size.height,.01f)
+            assertTrue(size.height<1010f)
+        }
+    }
     @Test fun geometryHandlesSmallWindowsAndPhotoAspect() {
         for(aspect in listOf(3f/4f,4f/3f,9f/16f,16f/9f)) for(width in listOf(300f,1080f,2400f)) {
             val result=ViewfinderGeometry.fit(width,700f,aspect)!!

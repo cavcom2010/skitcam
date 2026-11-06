@@ -147,6 +147,110 @@ class CameraRotationDeviceTest {
         Thread.sleep(800)
         return activity.orientation.pose!!
     }
+    private fun touchTarget(label: String): android.graphics.Rect {
+        var target: AccessibilityNodeInfo?=null
+        fun find(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            if(n.isVisibleToUser && (n.text?.toString()==label || n.contentDescription?.toString()==label)) {
+                var button=n
+                while(!button.isClickable && button.parent!=null) button=button.parent
+                if(button.isClickable && button.isEnabled) return button
+            }
+            for(i in 0 until n.childCount) n.getChild(i)?.let { find(it)?.let { found -> return found } }
+            return null
+        }
+        await("$label target") {
+            inst.uiAutomation.clearCache()
+            target=inst.uiAutomation.rootInActiveWindow?.let(::find);target!=null
+        }
+        assertTrue("$label enabled",target!!.isEnabled && target!!.isClickable)
+        return android.graphics.Rect().apply { target!!.getBoundsInScreen(this) }
+    }
+    private fun tap(x: Float,y: Float) {
+        val down=android.os.SystemClock.uptimeMillis()
+        for(action in listOf(android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_UP)) {
+            val event=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,x,y,0)
+            event.source=android.view.InputDevice.SOURCE_TOUCHSCREEN
+            assertTrue(inst.uiAutomation.injectInputEvent(event,true));event.recycle()
+            Thread.sleep(40)
+        }
+    }
+    private fun pinch(x: Float,y: Float) {
+        val down=android.os.SystemClock.uptimeMillis()
+        fun send(action: Int,spread: Float,count: Int) {
+            val properties=Array(count) { i -> android.view.MotionEvent.PointerProperties().apply {
+                id=i;toolType=android.view.MotionEvent.TOOL_TYPE_FINGER
+            } }
+            val coordinates=Array(count) { i -> android.view.MotionEvent.PointerCoords().apply {
+                this.x=x+if(i==0) -spread else spread;this.y=y;pressure=1f;size=1f
+            } }
+            val event=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,count,
+                properties,coordinates,0,0,1f,1f,0,0,android.view.InputDevice.SOURCE_TOUCHSCREEN,0)
+            assertTrue(inst.uiAutomation.injectInputEvent(event,true));event.recycle()
+        }
+        send(android.view.MotionEvent.ACTION_DOWN,30f,1)
+        send(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),30f,2)
+        for(step in 1..10) { send(android.view.MotionEvent.ACTION_MOVE,30f+step*8,2);Thread.sleep(25) }
+        send(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT),110f,2)
+        send(android.view.MotionEvent.ACTION_UP,110f,1)
+    }
+    private fun photoLandscapeGeometry(report: JSONObject) {
+        geometry(report)
+        val insets=report.getJSONObject("safeInsets")
+        val dock=(if(activity.resources.configuration.fontScale>1.5f) 192 else 152)*activity.resources.displayMetrics.density
+        val width=report.getInt("windowWidth")-insets.getInt("left")-insets.getInt("right")-dock
+        val height=(report.getInt("windowHeight")-insets.getInt("top")-insets.getInt("bottom")).toFloat()
+        val fitted=ViewfinderGeometry.fit(width,height,4f/3f)!!
+        assertEquals("Fit complete safe-height Photo",fitted.width.toDouble(),report.getDouble("viewWidth"),2.0)
+        assertEquals(fitted.height.toDouble(),report.getDouble("viewHeight"),2.0)
+        assertEquals(insets.getInt("left")+(width-fitted.width)/2.0,report.getDouble("viewX"),2.0)
+        assertEquals(insets.getInt("top")+(height-fitted.height)/2.0,report.getDouble("viewY"),2.0)
+    }
+    private fun photoLandscapeTouchControls(report: JSONObject) {
+        val lensLabel=if(camera.choice.lens==CameraLens.Rear) "Switch to front camera" else "Switch to rear camera"
+        val labels=listOf("Settings","Quick settings","Take photo","Open saved media gallery",lensLabel,"Photo","Skit Video")
+        val bounds=labels.associateWith(::touchTarget)
+        val inset=report.getJSONObject("safeInsets")
+        val minimum=48*activity.resources.displayMetrics.density-2
+        for((label,rect) in bounds) {
+            assertTrue("$label 48dp target $rect",rect.width()>=minimum && rect.height()>=minimum)
+            assertTrue("$label safe $rect",rect.left>=inset.getInt("left") && rect.top>=inset.getInt("top") &&
+                rect.right<=report.getInt("windowWidth")-inset.getInt("right") && rect.bottom<=report.getInt("windowHeight")-inset.getInt("bottom"))
+        }
+        for((i,first) in labels.withIndex()) for(second in labels.drop(i+1))
+            assertFalse("$first overlaps $second",android.graphics.Rect.intersects(bounds.getValue(first),bounds.getValue(second)))
+        val image=android.graphics.Rect(report.getInt("viewX"),report.getInt("viewY"),
+            report.getInt("viewX")+report.getInt("viewWidth"),report.getInt("viewY")+report.getInt("viewHeight"))
+        fun blocked(x: Float,y: Float) {
+            assertTrue("Probe overlaps actual image",image.contains(x.toInt(),y.toInt()))
+            assertTrue("Probe avoids buttons",bounds.values.none { it.contains(x.toInt(),y.toInt()) })
+            val focus=main { camera.focus }
+            tap(x,y);pinch(x,y);Thread.sleep(200)
+            assertEquals("Overlay gaps do not focus",focus,main { camera.focus })
+            assertEquals("Overlay gaps do not zoom",1f,camera.observedZoom,.01f)
+        }
+        blocked(image.exactCenterX(),bounds.getValue("Settings").exactCenterY())
+        blocked(image.left+40f,bounds.getValue("Photo").exactCenterY())
+        // The remaining pillarbox is outside the actual PreviewView.
+        val focus=main { camera.focus }
+        tap((inset.getInt("left")+image.left)/2f,image.exactCenterY())
+        assertEquals("Letterbox does not focus",focus,main { camera.focus })
+        val quick=bounds.getValue("Quick settings")
+        tap(quick.exactCenterX(),quick.exactCenterY())
+        await("quick settings receive real touch") { node("Close")!=null }
+        click("Close");await("quick settings closed") { node("Close")==null }
+        tap(image.exactCenterX(),image.exactCenterY())
+        await("visible-frame focus feedback") { camera.focus!=null || camera.message?.contains("focus",true)==true }
+        camera.focus?.let {
+            assertEquals(image.width()/2f,it.x,3f);assertEquals(image.height()/2f,it.y,3f)
+        }
+        val focusSupported=camera.focus!=null
+        pinch(image.exactCenterX(),image.exactCenterY())
+        await("visible-frame pinch zoom") { camera.observedZoom>1.1f }
+        main { camera.adjustZoom(1f) };await("restore actual 1x") { kotlin.math.abs(camera.observedZoom-1f)<.01f }
+        File(folder,"touch-${camera.choice.lens}-${activity.orientation.displayRotation}.json").writeText(
+            JSONObject().put("focusFeedback",camera.focusResult).put("focusSupported",focusSupported)
+                .put("controls",JSONObject(bounds.mapValues { it.value.toShortString() })).toString(2))
+    }
     private fun choose(mode: CameraMode,lens: CameraLens) {
         main { camera.select(mode,lens,true) }
         await("$mode $lens") { camera.choice==CameraChoice(mode,lens) && camera.streaming && !camera.switching &&
@@ -499,5 +603,102 @@ class CameraRotationDeviceTest {
             waitPose(0,"return-portrait");geometry(shot("$prefix-portrait"))
         }
         phase("complete")
+    }
+    @Test fun guidedPhotoLandscapeViewfinder() {
+        check(args.getString("physical")=="true")
+        check(!model.snapshots.value.openSession && !ExportJournal.busy)
+        val baseline=args.getString("photoBaseline")=="true"
+        val sampleOnly=args.getString("photoSampleOnly")=="true"
+        val reference=if(baseline) null else File(context.filesDir,
+            "validation-rotation/${checkNotNull(args.getString("photoBaselineRun")) { "Supply photoBaselineRun from the pre-change capture" }}")
+        val session=model.snapshots.value.session
+        val metadata=session?.let { File(context.filesDir,"sessions/${it.id}/session.json").readBytes() }
+        val oldTimer=camera.timer
+        try {
+            main { camera.timer(0) }
+            val lenses=if(sampleOnly) listOf(CameraLens.valueOf(args.getString("lens") ?: "Rear"))
+                else listOf(CameraLens.Rear,CameraLens.Front)
+            for(lens in lenses) {
+                choose(CameraMode.Photo,lens)
+                val capture=activity.photoModel.capture
+                val identity=System.identityHashCode(activity)
+                for((index,pose) in listOf(0,270,90,0).withIndex()) {
+                    if(sampleOnly && index!=when(args.getString("photoSamplePose") ?: "270") {
+                        "0" -> 0
+                        "270" -> 1
+                        "90" -> 2
+                        else -> error("photoSamplePose must be 0, 270 or 90")
+                    }) continue
+                    waitPose(pose,"photo-hold-$pose")
+                    if(sampleOnly) Thread.sleep((args.getString("photoSteadySeconds") ?: "0").toLong().coerceIn(0,30)*1000)
+                    assertSame("Physical rotation retains ImageCapture",capture,activity.photoModel.capture)
+                    assertEquals(identity,System.identityHashCode(activity))
+                    assertEquals(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR,main { activity.requestedOrientation })
+                    assertEquals(1f,camera.observedZoom,.01f)
+                    val name="photo-layout-${lens.name}-$pose-$index"
+                    val report=shot(name);geometry(report)
+                    if(reference!=null) {
+                        val old=JSONObject(File(reference,"$name.json").readText())
+                        for(key in listOf("preview","capture")) {
+                            val expected=old.getJSONObject(key);val actual=report.getJSONObject(key)
+                            for(field in listOf("width","height","cropRect","rotationDegrees"))
+                                assertEquals("Unchanged $key $field",expected.get(field),actual.get(field))
+                        }
+                        if(pose==0) for(field in listOf("viewX","viewY","viewWidth","viewHeight"))
+                            assertEquals("Unchanged portrait Photo $field",old.getInt(field),report.getInt(field))
+                    }
+                    if(pose!=0 && !baseline) {
+                        photoLandscapeGeometry(report)
+                        if(!sampleOnly) photoLandscapeTouchControls(report)
+                    }
+                    if(index<3) {
+                        // Capture the actual PreviewView immediately before the physical shutter tap.
+                        val before=activity.photoModel.saveCount
+                        shot("$name-capture")
+                        val shutter=touchTarget("Take photo")
+                        // Accessibility/screen capture can take a while. Sample the native
+                        // image again immediately before the shutter, reducing motion skew.
+                        main { preview()!!.bitmap!!.let { bitmap ->
+                            File(folder,"$name-capture-preview.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) }
+                            bitmap.recycle()
+                        } }
+                        tap(shutter.exactCenterX(),shutter.exactCenterY())
+                        await("photo saved through real shutter") { activity.photoModel.saveCount>before && !activity.photoModel.busy }
+                        val jpeg=File(folder,"$name.jpg")
+                        context.contentResolver.openInputStream(activity.photoModel.lastUri!!)!!.use { input -> jpeg.outputStream().use { input.copyTo(it) } }
+                        val facts=com.calvinmazhindu.skitcam.photo.PhotoStore(context).validate(jpeg)
+                        File(folder,"$name-jpeg.json").writeText(JSONObject().put("width",facts.width).put("height",facts.height)
+                            .put("orientation",facts.orientation).put("sha256",sha(jpeg)).toString(2))
+                        if(reference!=null) {
+                            val expected=JSONObject(File(reference,"$name-jpeg.json").readText())
+                            assertEquals("Unchanged JPEG width",expected.getInt("width"),facts.width)
+                            assertEquals("Unchanged JPEG height",expected.getInt("height"),facts.height)
+                            assertEquals("Unchanged JPEG EXIF",expected.getInt("orientation"),facts.orientation)
+                        }
+                    }
+                    if(pose!=0 && !baseline && !sampleOnly) {
+                        // Deliberate zoom survives the next in-place physical rotation.
+                        main { camera.adjustZoom(1.5f) }
+                        await("deliberate Photo zoom") { kotlin.math.abs(camera.observedZoom-1.5f)<.01f }
+                        val next=if(pose==270) 90 else 0
+                        waitPose(next,"photo-hold-$next")
+                        assertSame(capture,activity.photoModel.capture)
+                        assertEquals(1.5f,camera.observedZoom,.01f)
+                        main { camera.adjustZoom(1f) };await("1x after rotation") { kotlin.math.abs(camera.observedZoom-1f)<.01f }
+                    }
+                }
+                if(sampleOnly) waitPose(0,"return-portrait")
+                if(!baseline && !sampleOnly) {
+                    val video=touchTarget("Skit Video");tap(video.exactCenterX(),video.exactCenterY())
+                    await("Photo-to-Video mode touch") { camera.choice.mode==CameraMode.SkitVideo && model.cameraReady }
+                    geometry(shot("video-portrait-after-${lens.name}"))
+                    val photo=touchTarget("Photo");tap(photo.exactCenterX(),photo.exactCenterY())
+                    await("Video-to-Photo mode touch") { camera.choice.mode==CameraMode.Photo && camera.streaming }
+                }
+            }
+            if(session!=null) assertArrayEquals("Photo must not alter recording metadata",metadata,
+                File(context.filesDir,"sessions/${session.id}/session.json").readBytes())
+            phase("complete")
+        } finally { main { camera.timer(oldTimer) } }
     }
 }

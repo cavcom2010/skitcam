@@ -197,7 +197,6 @@ internal fun MainActivity.CameraScreen() {
     }
     val photo = camera.choice.mode == CameraMode.Photo
     val immersiveVideo = !photo && !landscape
-    val landscapeVideo = !photo && landscape
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
@@ -282,15 +281,15 @@ internal fun MainActivity.CameraScreen() {
         if(!recovered || !camera.ready || !photos.recovered || (!orientation.ready && !camera.streaming)) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
-            // Portrait video uses the space beneath the dock too. Keep the complete fitted
-            // recording frame; dock height still reserves space for review/editing below.
+            // Landscape modes use safe height behind the header/mode overlays; portrait
+            // video extends beneath its dock. Always fit the complete capture frame.
             CameraPreview(recordingModel,camera,photos,displayRotation=orientation.displayRotation,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
-                top=if(landscapeVideo) 0.dp else with(density) { headerHeight.toDp() },
-                bottom=if(landscapeVideo) 0.dp else if(landscape) 56.dp else if(immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
+                top=if(landscape) 0.dp else with(density) { headerHeight.toDp() },
+                bottom=if(landscape || immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
                 end=if(landscape) dockWidth else 0.dp)
                 .then(if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
                     WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                else if(landscapeVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
+                else if(landscape) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
                     WindowInsetsSides.Start + WindowInsetsSides.Vertical)) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
@@ -310,7 +309,7 @@ internal fun MainActivity.CameraScreen() {
             )
         }
         if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
-            .then(if(landscapeVideo) Modifier.blockPreviewInput() else Modifier)
+            .then(if(landscape) Modifier.blockPreviewInput() else Modifier)
             .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
             Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) (dockWidth+8.dp) else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
                 horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
@@ -410,8 +409,8 @@ internal fun MainActivity.CameraScreen() {
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
         if(!snapshot.openSession && landscape && !finishing && !settings && !quick && camera.ready) Row(Modifier.align(Alignment.BottomStart)
             .fillMaxWidth().padding(end=(dockWidth+8.dp))
-            .then(if(landscapeVideo) Modifier.background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.65f))))
-                .blockPreviewInput() else Modifier)
+            .background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.65f))))
+            .blockPreviewInput()
             .safeDrawingPadding().padding(8.dp),horizontalArrangement=Arrangement.Center) {
             listOf(CameraMode.Photo to "Photo",CameraMode.SkitVideo to "Skit Video").forEach { (mode,label) ->
                 FilterChip(selected=camera.choice.mode==mode,onClick={selectCamera(mode)},enabled=maySwitch,label={Text(label,maxLines=1)})
