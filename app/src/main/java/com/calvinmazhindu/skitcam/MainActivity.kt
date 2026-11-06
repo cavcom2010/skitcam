@@ -199,7 +199,11 @@ internal fun MainActivity.CameraScreen() {
     }
     val photo = camera.choice.mode == CameraMode.Photo
     val immersiveVideo = !photo && !landscape
-    val fullPhotoPortrait=photo && !landscape && camera.photoAspectRatio==PhotoAspectRatio.Full
+    // Match the stock camera's Full mode: the image fills the whole screen,
+    // with the header, dock and mode controls drawn over it.
+    val fullPhoto = photo && camera.photoAspectRatio==PhotoAspectRatio.Full
+    // Portrait 9:16 uses the full screen width and extends behind the bottom dock.
+    val wideNineSixteen = photo && !landscape && camera.photoAspectRatio==PhotoAspectRatio.SixteenNine
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
@@ -239,13 +243,6 @@ internal fun MainActivity.CameraScreen() {
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
-    var photoModesHeight by remember { mutableIntStateOf(0) }
-    var photoShutterHeight by remember { mutableIntStateOf(0) }
-    // Full uses structural controls, not transient countdown/save/focus messages.
-    // Those messages may overlay the image but cannot change the capture crop.
-    val fullPhotoDockHeight=if(photoModesHeight>0 && photoShutterHeight>0)
-        photoModesHeight+photoShutterHeight+with(density) { 26.dp.roundToPx() }+WindowInsets.safeDrawing.getBottom(density)
-        else controlsHeight
     LaunchedEffect(snapshot.state, snapshot.session?.id) {
         if (snapshot.state != RecordingState.Paused || trimModel.sessionId?.let { it != snapshot.session?.id } == true) trimModel.close()
         if (snapshot.state != RecordingState.Paused ||
@@ -298,14 +295,14 @@ internal fun MainActivity.CameraScreen() {
             // Landscape modes use safe height behind the header/mode overlays; portrait
             // video extends beneath its dock. Always fit the complete capture frame.
             CameraPreview(recordingModel,camera,photos,displayRotation=orientation.displayRotation,gesturesEnabled=adjustments && !quick && !settings && !photoRatioMenu, modifier=Modifier.fillMaxSize().padding(
-                top=if(landscape) 0.dp else with(density) { headerHeight.toDp() },
-                bottom=if(landscape || immersiveVideo) 0.dp else with(density) { (if(fullPhotoPortrait) fullPhotoDockHeight else controlsHeight).toDp() },
-                end=if(landscape) dockWidth else 0.dp)
-                .then(if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
+                top=if(fullPhoto || landscape) 0.dp else with(density) { headerHeight.toDp() },
+                bottom=if(fullPhoto || wideNineSixteen || landscape || immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
+                end=if(fullPhoto) 0.dp else if(landscape) dockWidth else 0.dp)
+                .then(if(fullPhoto) Modifier
+                else if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
                     WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 else if(landscape) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Start + WindowInsetsSides.Vertical))
-                else if(fullPhotoPortrait) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)) else Modifier))
+                    WindowInsetsSides.Start + WindowInsetsSides.Vertical)) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -324,7 +321,7 @@ internal fun MainActivity.CameraScreen() {
             )
         }
         if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
-            .then(if(landscape) Modifier.blockPreviewInput() else Modifier)
+            .then(if(landscape || fullPhoto) Modifier.blockPreviewInput() else Modifier)
             .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
             Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) (dockWidth+8.dp) else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
                 horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
@@ -358,7 +355,7 @@ internal fun MainActivity.CameraScreen() {
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
-                .then(if(immersiveVideo || fullPhotoPortrait) Modifier.blockPreviewInput() else Modifier)
+                .then(if(immersiveVideo || fullPhoto || wideNineSixteen) Modifier.blockPreviewInput() else Modifier)
                 .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
@@ -375,7 +372,7 @@ internal fun MainActivity.CameraScreen() {
                         FilterChip(selected=camera.choice.mode==mode,onClick={photos.cancelTimer();selectCamera(mode=mode)},
                             enabled=maySwitch && !camera.switching,label={Text(label)},modifier=modifier)
                     }
-                    Row(Modifier.onSizeChanged { photoModesHeight=it.height },horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         ModeChip(CameraMode.Photo,"Photo")
                         ModeChip(CameraMode.SkitVideo,"Skit Video")
                     }
@@ -391,7 +388,7 @@ internal fun MainActivity.CameraScreen() {
                     @Composable fun PhotoLens() { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } }
                     if(landscape) {
                         PhotoRecent();PhotoShutter();PhotoLens()
-                    } else Row(Modifier.fillMaxWidth().onSizeChanged { photoShutterHeight=it.height },horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
+                    } else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
                     if(photos.countdown>0) Text("${photos.countdown} · Cancel",modifier=Modifier.semantics { contentDescription="Photo countdown ${photos.countdown}" })
                     if(photos.countdown>0) TextButton(onClick=photos::cancelTimer) { Text("Cancel timer") }
                     if(photos.canRetry) Text("Photo awaiting save",style=MaterialTheme.typography.labelSmall)

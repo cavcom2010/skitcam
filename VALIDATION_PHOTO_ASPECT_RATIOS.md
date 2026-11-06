@@ -1,236 +1,178 @@
-# Compact Photo aspect selector and Moto G54 production deployment
+# Photo aspect ratios, Full screen, and Moto G54 production deployment
 
 Validation: **6 November 2026**, Moto G54 5G **`ZY22KJQLTV`**, Android 15 / API 35,
-1080×2400, density 400, font 1.3, three-button navigation. Working branch:
-**`deploy/photo-landscape-moto-g54`**. Local `main`, `origin/main` and the live remote
-`main` were verified at **`9f88384a60c923e999250af7fe00b860a781c8e6`** before work
-and at closing inspection. The working tree was initially clean. No reset,
-checkout overwrite, uninstall or application-data clear was used. Deployment and
-validation completed before the user requested a commit; nothing was pushed.
+1080×2400, density 400, font 1.3, three-button navigation.
+Working branch: **`deploy/photo-landscape-moto-g54`**, based on `9f88384`
+(`f90856c` contains the earlier selector version). This corrected work is
+**uncommitted**; nothing was pushed.
 
-The original deployment installed the exact landscape-Photo fix. During that
-verification the user requested a visible Photo ratio selector, specified that it
-must avoid UI clutter, and chose **Full = available viewfinder area**. The final
-installed build therefore includes the **selector implementation on this branch**,
-installed from the working tree before committing, in addition to `9f88384`;
-that base commit alone does not contain it.
+The stock **Motorola Camera** was used as the reference. In portrait it offers
+**1:1, 3:4, 9:16, Full**; rotating the phone flips the presets to **1:1, 4:3,
+16:9, Full**. Its 9:16 preview is **full width** (1080×1920) beneath the top bar,
+with the bottom controls over the image. Its **Full** preview fills the entire
+screen. Our app now follows the same model.
 
-## UI and capture behavior
+## Final behavior
 
-- The existing Photo header is now one compact **`Photo · 4:3 ▾`** control.
-  Tapping it opens a four-item dropdown: **1:1, 4:3, 16:9, Full**. Only the current
-  selection remains visible; there is no extra toolbar row or permanent strip.
-- The selection is Photo-only and persists across lenses and app recreation.
-  Missing/unknown preference values restore **4:3**.
-- **Full** fills the available preview rectangle, not the phone's 20:9 screen
-  ratio. It keeps the separate shutter dock and safe insets.
-- The original 4:3 `ViewPort.FIT` path, highest-resolution/fallback selection,
-  maximize-quality capture and JPEG quality 100 are retained.
-- Other ratios use a shared centered CameraX ViewPort crop for Preview and
-  ImageCapture. `PreviewView.FIT_CENTER` remains in use: selected shapes crop the
-  sensor interval intentionally, never stretch the image. Saved JPEG pixel
-  dimensions consequently change for non-default shapes.
-- Ratio changes are disabled during countdown/capture/save and do not apply in
-  Video mode. Camera gestures are disabled while the dropdown is open.
-- Preset framing retains its binding through ordinary rotations. Full rebinds
-  only for a changed crop interval; natural-display crop coordinates avoid an
-  unnecessary rebind between opposite landscape directions.
-- Full's portrait area uses structural control heights, excluding temporary
-  focus/save/countdown text. Those messages can overlay the frame but cannot
-  change its crop. A pending countdown/capture holds its existing crop through a
-  rotation and adopts the new Full rectangle only after saving.
-
-Implementation: `photo/PhotoAspectRatio.kt`, `photo/PhotoAspectSelector.kt`,
-`CameraModel.kt`, `PhotoModel.kt`, `CameraPreview.kt` and `MainActivity.kt`.
-Recording/session/export production code and the sensor orientation policy were
-not edited. Version metadata remains **0.11.2 / code 15**; APK hash, rather than
-version text, identifies the installed build.
-
-## Production installation and recording guard
-
-Before each replacement, read-only inspection checked session metadata, the
-latest session selected by the store's **mtime-based** recovery rule, Photo jobs,
-the latest export journal and production services. All **184 recording journals
-were Completed**, the latest had no pending segment, and no production service
-was running. No active or paused production recording was interrupted. Historical
-Completed metadata/journals were retained unchanged.
-
-The production APK was built **without `validationSuffix`**, checked as package
-`com.calvinmazhindu.skitcam`, and its signing-certificate SHA-256 matched the
-previous installed APK. Installation used **`adb install -r`**. The installed
-`base.apk` hash was then independently compared with the built artifact.
-
-| Artifact | SHA-256 |
-|---|---|
-| Initially installed build, before this task | `9cc0a477273a36b70ce13dc08b4dc087b2c89863ce455e7331d0aa76e88eff12` |
-| First deployment, exact `9f88384` layout fix | `31c445963a626ac53d3c2b3a2d9569afce91b6d1b05a7b3702cf2ed4d9a9c1ab` |
-| **Final installed build, including requested ratio selector** | **`6611115449c85e7ac5d43efdb43b061cbc8bc9806fcc017e059db79ba52eaa24`** |
-
-Delivery artifact: **`app/build/outputs/apk/debug/app-debug.apk`**. Both installs
-preserved application data and the signing identity.
-
-## Actual production PreviewView measurements
-
-Each measurement combines the accessibility image rectangle with the **native
-`androidx.camera.view.PreviewView` hierarchy dimensions**, plus the display dump
-and active production camera client. Native width/height agreed with the image
-rectangle. Camera IDs **0 / 1** confirmed rear/front clients respectively.
-
-Bounds are `(x, y, width, height)` in physical pixels; each row passed on **both
-production camera lenses**:
-
-| Mode / pose | Display | PreviewView bounds |
+| Phone orientation | Photo choices | Preview geometry |
 |---|---|---|
-| Photo 4:3, portrait | 1080×2400 | **(0, 346, 1080, 1440)** |
-| Photo 4:3, landscape top left / rotation 1 | 2400×1080 | **(335, 70, 1347, 1010)** |
-| Photo 4:3, landscape top right / rotation 3 | 2400×1080 | **(338, 70, 1347, 1010)** |
-| Skit Video, portrait | 1080×2400 | **(0, 237, 1080, 1920)** |
-| Skit Video, landscape top left | 2400×1080 | **(117, 74, 1783, 1003)** |
-| Skit Video, landscape top right | 2400×1080 | **(120, 74, 1783, 1003)** |
+| Portrait | **1:1 · 3:4 · 9:16 · Full** | 1:1 = 1080×1080; 3:4 = 1080×1440; 9:16 = **1080×1920 full width**; Full = **1080×2400** |
+| Landscape | **1:1 · 4:3 · 16:9 · Full** | 1:1 = 1010×1010; 4:3 = 1347×1010; 16:9 = 1783×1003; Full = **2400×1080** |
+| Skit Video, portrait | — | 1080×1920 (9:16) |
+| Skit Video, landscape | — | 1783×1003 (16:9) |
 
-This confirms the requested approximately **1347×1010** Photo utilization on the
-installed production app, rather than only in an isolated test build. The Photo
-portrait origin differs from the earlier isolated record because of available
-toolbar/dock space; the 1080×1440 fitted dimensions are unchanged.
+- The selected ratio **flips automatically with orientation**: 3:4 ⇄ 4:3 and
+  9:16 ⇄ 16:9. 1:1 is unchanged; Full always fills the current screen.
+- **Full is not a named ratio and has no fixed number.** It is
+  `PhotoFrame(availableWidth, availableHeight)` from the **runtime window**
+  (`LocalWindowInfo.containerSize`). On this phone that is 1080×2400 portrait /
+  2400×1080 landscape; another phone uses its own dimensions. The earlier
+  reduced 9:20/20:9 form was only a mathematical simplification of this phone's
+  window; it has been removed from the code and tests.
+- **9:16 portrait uses the full width** below the header and extends behind the
+  bottom dock, matching the stock camera. It is not fit by available height.
+- **3:4 portrait** remains 1080×1440 (full width); **1:1** is 1080×1080.
+- Full previews sit **behind** the gradient header, bottom mode/shutter controls
+  and right-side landscape dock. Those overlays keep their safe insets,
+  gradients and final-pass pointer blocking, so their gaps cannot focus or
+  pinch the image.
+- Default 4:3/3:4 still uses the original maximum-quality `ViewPort.FIT` path.
+  Other choices use a shared centered CameraX crop for Preview and ImageCapture.
+  `PreviewView.FIT_CENTER` remains: shapes crop the sensor interval; nothing is
+  stretched.
 
-### Production JPEG orientation
+## Why the first versions looked wrong
 
-Six new default-ratio photos were taken through the production shutter and copied
-from their newly created Gallery paths. Their bytes matched the PhotoStore
-publication SHA-256; Pillow independently decoded dimensions and applied EXIF.
+1. **9:16 was fit by height.** Portrait 16:9 was implemented as 9:16 but fitted
+   to the available 1658 px height, producing 933×1658 with black side bars.
+   The stock camera uses the full 1080 px width and 1920 px height. Corrected.
+2. **Full used the available viewfinder**, not the screen (1080×1658). It now
+   fills the whole runtime window.
+3. **CameraX's internal TextureView overflows PreviewView.** For 1:1/16:9 the
+   new view reported the correct bounds, but the old live 4:3 image remained
+   visible outside them. Bitmap-vs-screen comparison confirmed the new
+   PreviewView itself was correct; the oversize TextureView layer was not
+   clipped. `Modifier.clipToBounds()` around the preview frame fixes it.
+   `photoAspectPreviewClipRegression` now samples pixels outside the frame and
+   fails if the camera image leaks there.
+4. An interim “16:9 always wide” portrait implementation (1080×608) was rejected;
+   portrait 9:16 is full width 1080×1920.
 
-| Lens | Stored dimensions, all three poses | Portrait EXIF | Top-left landscape EXIF | Top-right landscape EXIF |
-|---|---|---:|---:|---:|
-| Rear | **4096×3072** | **6** | **1** | **3** |
-| Front | **2302×1740** | **8** | **1** | **3** |
+## Measured production results
 
-Portrait displays tall after EXIF, both landscapes display wide. Outputs remain
-unmirrored. Three additional production rear-portrait captures verified the new
-options and matching selected shape:
+Installed final build SHA-256:
+**`0a8b310db51ffa5b90f9693806bb3574ce29f90ab445874731ddd71fb3b7dbcf`**
+(package `com.calvinmazhindu.skitcam`, 0.11.2 / code 15).
 
-| Selection | PreviewView bounds | Stored JPEG | Displayed JPEG after EXIF |
+PreviewView bounds `(x,y,width,height)`; both lenses agreed and the native
+`PreviewView` size matched the accessibility rectangle:
+
+| Ratio, portrait | Bounds | Rear JPEG | Front JPEG |
 |---|---|---|---|
-| 1:1 | (0, 526, 1080, 1080) | 3072×3072 | 3072×3072 |
-| 16:9 | (74, 237, 933, 1658) | 4096×2304 | 2304×4096 |
-| Full | (0, 237, 1080, 1658) | 4096×2668 | 2668×4096 |
+| 3:4 | (0, 346, 1080, 1440) | 4096×3072, EXIF 6 | 2302×1740, EXIF 8 |
+| 1:1 | (0, 526, 1080, 1080) | 3072×3072, EXIF 6 | 1740×1740, EXIF 8 |
+| 9:16 | **(0, 359, 1080, 1920)** | 4096×2304, EXIF 6 | 2302×1296, EXIF 8 |
+| **Full** | **(0, 0, 1080, 2400)** | 4096×1844, EXIF 6 | 2302×1036, EXIF 8 |
 
-The production selector was then returned to **4:3**. No production START,
-PAUSE, RESUME or STOP command was issued for this verification. Video preview
-dimensions were checked on both lenses in all three poses; recording/export was
-exercised separately in the isolated app.
+| Ratio, landscape top-left | Bounds | Rear JPEG | Front JPEG |
+|---|---|---|---|
+| 4:3 | (335, 70, 1347, 1010) | 4096×3072, EXIF 1 | 2302×1740, EXIF 1 |
+| 1:1 | (504, 70, 1010, 1010) | 3072×3072, EXIF 1 | 1740×1740, EXIF 1 |
+| 16:9 | (117, 74, 1783, 1003) | 4096×2304, EXIF 1 | 2302×1296, EXIF 1 |
+| **Full** | **(0, 0, 2400, 1080)** | 4096×1844, EXIF 1 | 2302×1036, EXIF 1 |
 
-## Screenshots
+After EXIF orientation the 3:4/9:16/Full portrait JPEGs display tall, and all
+landscape JPEGs display wide. Full’s saved dimensions are the **runtime screen
+aspect** crop (on this phone 4096×1844 rear, 2302×1036 front); they are not a
+fixed 9:20 constant. Video stayed 1080×1920 portrait and 1783×1003 landscape on
+both lenses.
 
-Retained local, Git-ignored evidence is linked as in prior validation records:
+## Evidence and tests
 
-| Compact four-item menu | Full, available portrait area |
-|---|---|
-| ![Production ratio dropdown](.validation/photo-ratios/screens/production-menu.jpg) | ![Production Full Photo](.validation/photo-ratios/screens/production-full.jpg) |
+- **205 JVM tests passed**, 0 failures/errors/skips, including runtime-window
+  Full on four different device sizes, orientation labels, 9:16 full-width
+  fitting, preset rotation, countdown freezing and invalid geometry.
+- **Automatic device tests passed**: `photoAspectPreviewClipRegression`
+  (portrait, both lenses, all four ratios, outside-frame pixel check) and
+  `photoRatioMenuCaptureAndPersistence` (both lenses, all four ratios, matching
+  JPEG dimensions/aspects, persistence, no Video selector, ratio held while
+  saving).
+- **Guided physical test passed**: both landscape directions, both lenses, all
+  four ratios, plus Full countdown rotation. Full landscape measured 2400×1080;
+  the countdown JPEG retained the expected frozen interval.
+- **Production verification**: portrait all four ratios + Video on both lenses;
+  landscape top-left all four ratios + Video on both lenses; final build Full
+  verified at **1080×2400** and **2400×1080** on both lenses.
+- Production `assembleDebug` and `lint --offline` passed: **0 errors / 10 existing
+  warnings** (AndroidGradlePluginVersion, NewerVersionAvailable, DiscouragedApi,
+  five UsableSpace, two UseKtx). No new warning or suppression.
 
-| Production rear Photo, top-left landscape | Production front Photo, top-right landscape |
-|---|---|
-| ![Rear landscape Photo](.validation/photo-ratios/screens/production-rear-landscape.jpg) | ![Front landscape Photo](.validation/photo-ratios/screens/production-front-landscape.jpg) |
+### Retained failures/retries
 
-## Tests and retained failures
-
-- **204 JVM tests passed**, zero failures/errors/skips, including eight new
-  ratio/default restoration, preset orientation, Full area, invalid geometry,
-  crop-key and capture-freezing tests.
-- Production `testDebugUnitTest`, `assembleDebug`, `lint --offline` and isolated
-  app/test APK assembly passed. Lint: **0 errors / 10 existing warnings**, no new
-  suppression or warning.
-- The isolated ratio-menu/capture/persistence case passed twice. It captures all
-  four ratios on both lenses, validates Preview/ImageCapture crop aspect and
-  saved JPEG aspect, rejects disallowed changes, checks the selection after
-  Activity recreation and fresh preference loading, and verifies that focus
-  feedback cannot rebind or resize Full framing. The selector is absent in Video.
-- The physical landscape matrix produced **16 checked JPEGs**: four choices ×
-  two lenses × two directions. Every sample passed its native preview/capture
-  crop and JPEG-aspect assertions before the combined test's timer stage.
-- That initial combined invocation **failed** waiting eight seconds for the
-  requested physical turn during the countdown. Its log and successful samples
-  are retained; the whole invocation is not counted as passed.
-- The timer step was rerun separately with a readiness prompt and either
-  landscape direction accepted. It **passed**: the ImageCapture identity and
-  natural crop remained stable through rotation, the ratio control was disabled,
-  and the JPEG saved successfully. Its 4096×2668 / EXIF 1 output matched the frozen
-  portrait Full interval viewed in landscape (aspect approximately 1.5352).
-- Existing camera lifecycle/zoom recreation and STOP → two-segment verified
-  export → Gallery → Play → Share → camera return cases passed in the isolated
-  app. The selected final device logs contain **5 passing invocations / 4 distinct
-  methods**, with no assumption skips, in addition to the retained failed attempt.
-- **33 isolated JPEG copies** are retained, including successful landscape samples
-  from that initial invocation and the final timer proof. These are crop/aspect
-  checks, not a fresh calibrated optical or whole-frame pixel-correlation study.
-
-The production collection script initially stopped a metadata archive at an
-unmatched optional `.bak` pattern. It consequently failed to observe a newly
-saved Photo, even though capture succeeded. The collector now includes existing
-paths only and checks the archive exit status. Full original-file hash manifests
-were unaffected. The original archive did not contain a full preference backup;
-the final camera-choice comparison uses the subset explicitly observed in the
-read-only predeployment inspection (Photo/rear, Video/rear, grid on), with its
-provenance retained. Extra captures from early interaction/retries were kept.
-
-Not repeated: the full portable-project ZIP/picker suite, 15-render timing
-investigation, broad large-text/navigation-mode matrix, other phones or Android
-16 large-screen modes. Pixel quality, calibrated optical FOV and TalkBack
-usability are not claimed. Full intentionally crops to its chosen rectangle;
-default 4:3 capture dimensions remain as above.
+- The first 9:16 implementation produced the side bars described above; replaced.
+- The first Full implementation used the 1080×1658 available area; replaced.
+- The interim 1080×608 “16:9” portrait was rejected by the user; final is 1080×1920.
+- The TextureView leak was diagnosed from the view tree and fixed with
+  `clipToBounds`; the regression test would have caught it.
+- A production selector was transiently disabled while the previous photo
+  finished saving; the test harness now waits for enabled controls.
+- `focus finish` initially failed to restore the **Video lens** preference
+  (`lens_SkitVideo`); the restore now selects both Video and Photo lens settings.
+  The corrected audit passed.
+- All failed logs, earlier builds and their screenshots are retained in the
+  ignored `.validation/` directories.
 
 ## Preservation and final state
 
-Fresh SHA-256 baselines were taken before the first production replacement and
-again before the selector replacement. At closing audit:
+Fresh SHA-256 baselines were taken before the production replacement. Closing
+audit: **0 changed or missing original files**.
 
-| Scope | Before first install | Final | Changed/missing original files |
-|---|---:|---:|---:|
-| Production session/photo-job files | **873** | **884** | **0** |
-| Existing public SkitCam Gallery files | **528** | **574** | **0** |
+| Scope | Before | After | Changed/missing | New verification files |
+|---|---:|---:|---:|---:|
+| Production sessions + photo jobs | 895 | 917 | **0** | 22 |
+| Public SkitCam Gallery | 626 | 656 | **0** | 30 |
 
-The later pre-selector baselines (**874 private / 564 public**) also matched
-byte-for-byte with zero missing/changed files. Added Gallery entries are retained
-verification photos/isolated output and intervening new captures. None was
-deleted to make the counts match. All **184 production recording journals**
-remained byte-for-byte unchanged; no production recording was created.
+All **184 production recording journals** remained byte-for-byte unchanged; no
+production recording was created. The additions are the verification photos;
+none were deleted. The app was left in the user’s pre-test camera state:
+**Photo · Front · 9:16**, Video lens **Rear**, grid **on**.
+Settings were unchanged: Auto-rotate **on**, `user_rotation=0`,
+`wm user-rotation=free`, font **1.3**, navigation **0**.
 
-An additional fresh isolated-validation audit matched every baseline file in the
-M11, M9, M10 and framing scopes. Its production 874→884 and public 529→574 counts
-use the slightly later baseline taken when ratio implementation began; all
-changed/missing lists were empty.
-
-The app was left upright in **rear Photo, 4:3**, with **Video's rear lens preference
-and grid enabled** preserved. Auto-rotate remained **ON**, `user_rotation=0`,
-`wm user-rotation=free`, font **1.3**, navigation mode **0**: no global setting was
-changed. The new ratio preference is now explicitly 4:3, and recent-media
-information naturally points to the newly saved verification photos.
-
-Audits cover Android user-0 production/accessible isolated data and the shared
-SkitCam Gallery folders, not other Android user profiles.
-
-## Evidence and reproduction
-
-`.validation/production-photo-install/evidence/` contains original and later hash
-manifests, metadata archives, certificate/package checks, original APK backup,
-installed APK hashes, native view/window/camera-client evidence, screenshots,
-nine explicitly decoded production JPEGs, and `audit.json` / settings snapshots.
-`.validation/photo-ratios/` holds build/test logs, `summary.json`, isolated
-screenshots/bitmaps/JPEGs, the failed timer attempt and passing retry, final audit
-manifests and reduced screenshots.
+## Reproduction
 
 ```bash
 ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lint --offline
 ./gradlew -PvalidationSuffix=.m11validation :app:assembleDebug :app:assembleDebugAndroidTest --offline
-# Install app/test APKs only in the existing isolated package for instrumentation.
 adb -s ZY22KJQLTV shell am instrument -w -r \
-  -e class com.calvinmazhindu.skitcam.camera.CameraRotationDeviceTest#photoRatioMenuCaptureAndPersistence \
-  -e rotationRun <unique-evidence-folder> \
+  -e class com.calvinmazhindu.skitcam.camera.CameraRotationDeviceTest#photoAspectPreviewClipRegression \
+  -e rotationRun <unique-folder> \
   com.calvinmazhindu.skitcam.m11validation.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-`guidedPhotoRatiosAndTimerRotation` requires `-e physical true`, real guided phone
-movements and a unique evidence folder; `-e timerOnly true` runs its timed stage
-alone. Production replacement requires a fresh idle/session/save/service check,
-matching signatures and production-package verification before `adb install -r`.
-Do not run isolated recording fixtures against production or alter global
-rotation to manufacture measurement results.
+The guided ratio test requires `-e physical true` and real physical movements.
+Production installation requires the idle/session/service checks, matching
+signing certificate and a fresh hash baseline before `adb install -r`.
+
+Ignored evidence is under `.validation/photo-ratios/` (automatic and physical
+runs, screenshots, JPEGs, clip samples, logs), `.validation/photo-ratio-recheck/`
+and `.validation/photo-ratio-916-final/` (final production focus, `audit.json`,
+prefs/settings, final Full measurements). The earlier
+`.validation/photo-ratio-recheck-16x9/focus/` retains the correction history.
+
+## Remaining limitations
+
+- Full is **100% of the current window**, but the saved JPEG is a **sensor crop**
+  to that runtime aspect. On this phone it is a 0.45 portrait crop; on another
+  phone it will follow that phone’s screen. No fixed ratio is assumed.
+- The Full/9:16 previews extend behind the gradient controls; those controls
+  intentionally obscure parts of the image. The frame itself remains complete
+  and unstretched.
+- Non-Full presets still reserve the header/dock area; only 9:16 portrait and
+  Full extend behind the dock. This matches the stock camera’s 9:16/Full
+  presentation on this device.
+- One physical Moto G54 and Android 15; split-screen, foldables, other OEM
+  sensors, Android 16 large-screen policy and TalkBack usability are unverified.
+  JPEG dimensions are device/sensor-dependent; the values above are this phone’s.
+- The corrected source changes are currently **uncommitted** on
+  `deploy/photo-landscape-moto-g54`; `main` remains `9f88384`.

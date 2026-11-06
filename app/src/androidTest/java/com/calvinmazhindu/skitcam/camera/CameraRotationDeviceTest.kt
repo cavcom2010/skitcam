@@ -3,6 +3,7 @@ package com.calvinmazhindu.skitcam.camera
 import android.Manifest
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
@@ -704,15 +705,50 @@ class CameraRotationDeviceTest {
         } finally { main { camera.timer(oldTimer) } }
     }
     private fun selectPhotoRatio(ratio: com.calvinmazhindu.skitcam.photo.PhotoAspectRatio) {
+        val landscape=activity.resources.configuration.orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val label=ratio.label(landscape)
         val button=touchTarget("Photo aspect ratio")
         tap(button.exactCenterX(),button.exactCenterY())
-        val option=touchTarget("Photo ratio ${ratio.label}")
+        val option=touchTarget("Photo ratio $label")
         tap(option.exactCenterX(),option.exactCenterY())
-        await("${ratio.label} framing ready") { camera.streaming && !camera.switching && camera.photoAspectRatio==ratio &&
+        await("$label framing ready") { camera.streaming && !camera.switching && camera.photoAspectRatio==ratio &&
             activity.photoModel.capture!=null && activity.photoModel.frame!=null }
+    }
+    /** CameraX's TextureView can overflow PreviewView; the app clips it explicitly. */
+    private fun assertPreviewClipped(name: String,report: JSONObject) {
+        val bitmap=BitmapFactory.decodeFile(File(folder,"$name-screen.png").path) ?: return
+        val left=report.getInt("viewX");val top=report.getInt("viewY")
+        val right=left+report.getInt("viewWidth");val bottom=top+report.getInt("viewHeight")
+        val portrait=report.getInt("configurationOrientation")==1
+        val margin=12
+        val samples=mutableListOf<Pair<Int,Int>>()
+        fun add(x: Int,y: Int) {
+            if(portrait) { if(x in 8..1071 && y in 250..1879) samples.add(x to y) }
+            else if(x in 150..2249 && y in 100..1039) samples.add(x to y)
+        }
+        add(left-margin,(top+bottom)/2);add(right+margin,(top+bottom)/2)
+        add((left+right)/2,top-margin);add((left+right)/2,bottom+margin)
+        val means=samples.map { (x,y) ->
+            var total=0.0;var count=0
+            for(dy in -3..3) for(dx in -3..3) {
+                val px=x+dx;val py=y+dy
+                if(px in 0 until bitmap.width && py in 0 until bitmap.height) {
+                    val color=bitmap.getPixel(px,py)
+                    total+=maxOf(color shr 16 and 0xff,color shr 8 and 0xff,color and 0xff);count++
+                }
+            }
+            total/count
+        }
+        bitmap.recycle()
+        // Full covers the whole available area, so it may legitimately have no outside margin.
+        if(means.isNotEmpty()) assertTrue("$name: preview image leaks outside the selected frame: $means",
+            means.all { it<40.0 })
+        File(folder,"$name-clip.json").writeText(JSONObject().put("samples",samples.size).put("means",means).toString(2))
     }
     private fun ratioCapture(name: String) {
         val report=shot(name)
+        assertPreviewClipped(name,report)
+        val landscape=activity.resources.configuration.orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val frame=checkNotNull(activity.photoModel.frame)
         assertEquals("FIT_CENTER",report.getString("scaleType"))
         assertEquals(frame.aspect.toDouble(),report.getDouble("viewWidth")/report.getDouble("viewHeight"),.006)
@@ -724,7 +760,7 @@ class CameraRotationDeviceTest {
         }
         val count=activity.photoModel.saveCount
         click("Take photo")
-        await("${camera.photoAspectRatio.label} JPEG saved") { !activity.photoModel.busy && activity.photoModel.saveCount>count }
+        await("${camera.photoAspectRatio.label(landscape)} JPEG saved") { !activity.photoModel.busy && activity.photoModel.saveCount>count }
         val file=File(folder,"$name.jpg")
         context.contentResolver.openInputStream(activity.photoModel.lastUri!!)!!.use { input -> file.outputStream().use { input.copyTo(it) } }
         val facts=com.calvinmazhindu.skitcam.photo.PhotoStore(context).validate(file)
@@ -829,6 +865,29 @@ class CameraRotationDeviceTest {
         } finally {
             main { camera.timer(timer) }
             if(activity.photoModel.busy) await("save before restoring ratio") { !activity.photoModel.busy }
+            main { camera.photoAspect(old,true) }
+            await("ratio restored") { camera.streaming && camera.photoAspectRatio==old }
+        }
+    }
+    @Test fun photoAspectPreviewClipRegression() {
+        check(!model.snapshots.value.openSession)
+        val old=camera.photoAspectRatio
+        try {
+            val landscape=activity.resources.configuration.orientation==android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            for(lens in listOf(CameraLens.Rear,CameraLens.Front)) {
+                choose(CameraMode.Photo,lens)
+                for(ratio in com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.entries) {
+                    main { camera.photoAspect(ratio,true) }
+                    await("${ratio.label(landscape)} ${lens.name} clip ready") {
+                        camera.streaming && camera.photoAspectRatio==ratio && activity.photoModel.frame!=null
+                    }
+                    Thread.sleep(1000)
+                    val name="clip-${lens.name}-${ratio.name}"
+                    assertPreviewClipped(name,shot(name))
+                }
+            }
+        } finally {
+            choose(CameraMode.Photo,CameraLens.Rear)
             main { camera.photoAspect(old,true) }
             await("ratio restored") { camera.streaming && camera.photoAspectRatio==old }
         }

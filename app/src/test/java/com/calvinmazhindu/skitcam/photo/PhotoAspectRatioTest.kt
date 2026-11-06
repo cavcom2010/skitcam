@@ -17,13 +17,27 @@ class PhotoAspectRatioTest {
             assertEquals(wide,ratio.frame(true,700,400))
         }
     }
-    @Test fun fullUsesAvailableViewfinderRatherThanPhoneScreenRatio() {
-        val full=PhotoAspectRatio.Full.frame(true,1783,1010)!!
-        assertEquals(1783f/1010f,full.aspect,0f)
-        assertNotEquals(2400f/1080f,full.aspect)
-        val fitted=ViewfinderGeometry.fit(1783f,1010f,full.aspect)!!
-        assertEquals(1783f,fitted.width,.01f);assertEquals(1010f,fitted.height,.01f)
-        assertEquals(PhotoFrame(540,829),PhotoAspectRatio.Full.frame(false,1080,1658))
+    @Test fun portraitLabelsAndNineSixteenUseFullWidth() {
+        assertEquals("1:1",PhotoAspectRatio.Square.label(false))
+        assertEquals("3:4",PhotoAspectRatio.FourThree.label(false))
+        assertEquals("9:16",PhotoAspectRatio.SixteenNine.label(false))
+        assertEquals("4:3",PhotoAspectRatio.FourThree.label(true))
+        assertEquals("16:9",PhotoAspectRatio.SixteenNine.label(true))
+        assertEquals("Full",PhotoAspectRatio.Full.label(false))
+        val fitted=ViewfinderGeometry.fit(1080f,2163f,9f/16f)!!
+        assertEquals(1080f,fitted.width,.01f)
+        assertEquals(1920f,fitted.height,.01f)
+        assertTrue(fitted.width==1080f) // full width, no side letterboxing
+    }
+    @Test fun fullIsExactlyTheRuntimeWindowOnAnyDevice() {
+        // Different screens produce different Full dimensions; no fixed ratio is assumed.
+        for((w,h) in listOf(1080 to 2400,1440 to 3120,1080 to 1920,2208 to 1840)) {
+            assertEquals(PhotoFrame(w,h),PhotoAspectRatio.Full.frame(false,w,h))
+            assertEquals(PhotoFrame(h,w),PhotoAspectRatio.Full.frame(true,h,w))
+            val full=PhotoAspectRatio.Full.frame(false,w,h)!!
+            val fitted=ViewfinderGeometry.fit(w.toFloat(),h.toFloat(),full.aspect)!!
+            assertEquals(w.toFloat(),fitted.width,.01f);assertEquals(h.toFloat(),fitted.height,.01f)
+        }
     }
     @Test fun emptyWindowNeverCreatesAnInvalidCaptureRatio() {
         for(ratio in PhotoAspectRatio.entries) {

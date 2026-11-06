@@ -1,9 +1,11 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
-Tap **Photo · 4:3 ▾** in the header to choose **1:1, 4:3, 16:9 or Full** without
-adding a permanent control row. Full fits the available viewfinder, and saved
-JPEGs match the chosen framing. See
+Tap the Photo ratio in the header to choose **1:1, 3:4, 9:16, Full** in portrait
+(or **1:1, 4:3, 16:9, Full** in landscape). Ratios flip with orientation: 3:4
+becomes 4:3 and 9:16 becomes 16:9. Portrait 9:16 uses the full screen width, and
+**Full is exactly 100% of the current screen on any device** rather than a fixed
+ratio. Saved JPEGs match the chosen framing. See
 [VALIDATION_PHOTO_ASPECT_RATIOS.md](VALIDATION_PHOTO_ASPECT_RATIOS.md) for device
 tests, production installation, measured bounds and preservation results.
 

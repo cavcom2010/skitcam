@@ -1,8 +1,16 @@
 package com.calvinmazhindu.skitcam.photo
 
 /** Photo framing, independent of recording profiles and device orientation policy. */
-enum class PhotoAspectRatio(val label: String) {
-    Square("1:1"), FourThree("4:3"), SixteenNine("16:9"), Full("Full");
+enum class PhotoAspectRatio {
+    Square, FourThree, SixteenNine, Full;
+
+    /** Labels follow the phone's current orientation, like the stock camera. */
+    fun label(landscape: Boolean): String = when(this) {
+        Square -> "1:1"
+        FourThree -> if(landscape) "4:3" else "3:4"
+        SixteenNine -> if(landscape) "16:9" else "9:16"
+        Full -> "Full"
+    }
 
     fun frame(landscape: Boolean, availableWidth: Int, availableHeight: Int): PhotoFrame? {
         if(availableWidth<=0 || availableHeight<=0) return null
@@ -10,7 +18,9 @@ enum class PhotoAspectRatio(val label: String) {
             Square -> PhotoFrame(1,1)
             FourThree -> PhotoFrame(4,3)
             SixteenNine -> PhotoFrame(16,9)
-            Full -> return PhotoFrame(availableWidth,availableHeight).reduced()
+            // Exactly 100% of this device's current window. Never a fixed ratio:
+            // phones can be 20:9, 19.5:9, 4:3, foldable, split-screen, etc.
+            Full -> return PhotoFrame(availableWidth,availableHeight)
         }
         return if(landscape) wide else wide.swapped()
     }

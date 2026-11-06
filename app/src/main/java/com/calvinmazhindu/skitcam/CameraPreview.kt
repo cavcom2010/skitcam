@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -50,16 +51,19 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
             with(LocalDensity.current) { maxWidth.roundToPx() },with(LocalDensity.current) { maxHeight.roundToPx() })
             ?.rotated(displayRotation)?.reduced()
         var previous by remember(cameraModel.choice,selected) { mutableStateOf(desired) }
+        var previousRotation by remember(cameraModel.choice,selected) { mutableIntStateOf(displayRotation) }
         val natural=desired?.let { photoCaptureFrame(previous,it,photos.busy) }
-        SideEffect { if(!photos.busy) previous=desired }
+        // A pending timer/capture must not rebind while the phone rotates.
+        val bindingRotation=if(photos.busy) previousRotation else displayRotation
+        SideEffect { if(!photos.busy) { previous=desired;previousRotation=displayRotation } }
         if(photo && natural==null) CameraMessage("Preparing photo framing…")
         else CameraPreviewContent(model,cameraModel,photos,displayRotation,gesturesEnabled,
             selected,natural?.rotated(displayRotation),
-            selected?.let { PhotoBindingKey(it,natural.takeIf { selected==PhotoAspectRatio.Full }) },maxWidth,maxHeight)
+            selected?.let { PhotoBindingKey(it,bindingRotation,natural.takeIf { selected==PhotoAspectRatio.Full }) },maxWidth,maxHeight)
     }
 }
 
-private data class PhotoBindingKey(val ratio: PhotoAspectRatio,val fullFrame: PhotoFrame?)
+private data class PhotoBindingKey(val ratio: PhotoAspectRatio,val rotation: Int,val fullFrame: PhotoFrame?)
 
 @OptIn(ExperimentalSessionConfig::class)
 @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
@@ -265,7 +269,10 @@ private fun CameraPreviewContent(model: RecordingViewModel, cameraModel: CameraM
         val bounds=if(frame!=null) Modifier.size(frame.width.dp,frame.height.dp) else Modifier.fillMaxSize()
         // Anchor immersive portrait video below the toolbar, exposing as much of the
         // full frame above the controls as possible. Photo/landscape retain centering.
-        Box(bounds.align(if(!photo && !landscape) Alignment.TopCenter else Alignment.Center)
+        // CameraX's internal TextureView is larger than PreviewView and its transformed
+        // layer can draw outside PreviewView bounds. Explicit Compose clipping keeps the
+        // selected aspect/frame honest on screen instead of leaking the full sensor view.
+        Box(bounds.clipToBounds().align(if(!photo && !landscape) Alignment.TopCenter else Alignment.Center)
             .pointerInput(gesturesEnabled,choice) { if(gesturesEnabled) detectTapGestures { cameraModel.focus(view,it) } }
             .pointerInput(gesturesEnabled,choice) { if(gesturesEnabled) detectTransformGestures { _, _, scale, _ -> cameraModel.adjustZoom(cameraModel.zoom * scale) } }
             .semantics { contentDescription = "Camera preview. Tap to focus; pinch to zoom."
