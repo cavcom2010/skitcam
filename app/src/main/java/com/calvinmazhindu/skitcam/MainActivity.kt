@@ -17,6 +17,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.photo.PhotoModel
+import com.calvinmazhindu.skitcam.photo.PhotoAspectRatio
+import com.calvinmazhindu.skitcam.photo.PhotoAspectSelector
 import com.calvinmazhindu.skitcam.recording.CameraLens
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -197,6 +199,7 @@ internal fun MainActivity.CameraScreen() {
     }
     val photo = camera.choice.mode == CameraMode.Photo
     val immersiveVideo = !photo && !landscape
+    val fullPhotoPortrait=photo && !landscape && camera.photoAspectRatio==PhotoAspectRatio.Full
     fun switchAllowed() = CameraPolicy.maySwitch(recordingModel.recovered.value,recordingModel.snapshots.value,
         finishing || ExportJournal.busy,photos.busy || recordingModel.commandPending.value || camera.video.pending) && camera.streaming
     val maySwitch = switchAllowed() && !commandPending
@@ -208,10 +211,14 @@ internal fun MainActivity.CameraScreen() {
     }
     var quick by rememberSaveable { mutableStateOf(false) }
     var settings by rememberSaveable { mutableStateOf(false) }
+    var photoRatioMenu by remember { mutableStateOf(false) }
     val blocked = snapshot.state in setOf(RecordingState.Starting,RecordingState.Finalising,RecordingState.Stopping)
     val editors = arrangement.draft != null || trimModel.segment != null || review.selection != null || finishing
     val adjustments = !blocked && !editors && !photos.busy && camera.streaming
     LaunchedEffect(editors, blocked) { if(editors || blocked) { quick = false; settings = false } }
+    LaunchedEffect(photo,photos.busy,quick,settings,editors,blocked) {
+        if(!photo || photos.busy || quick || settings || editors || blocked) photoRatioMenu=false
+    }
     val legacyStorage = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
     fun takePhoto() {
         if(!grantedPhotoPermission(this) || !CameraPolicy.maySwitch(recordingModel.recovered.value,
@@ -232,6 +239,13 @@ internal fun MainActivity.CameraScreen() {
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
+    var photoModesHeight by remember { mutableIntStateOf(0) }
+    var photoShutterHeight by remember { mutableIntStateOf(0) }
+    // Full uses structural controls, not transient countdown/save/focus messages.
+    // Those messages may overlay the image but cannot change the capture crop.
+    val fullPhotoDockHeight=if(photoModesHeight>0 && photoShutterHeight>0)
+        photoModesHeight+photoShutterHeight+with(density) { 26.dp.roundToPx() }+WindowInsets.safeDrawing.getBottom(density)
+        else controlsHeight
     LaunchedEffect(snapshot.state, snapshot.session?.id) {
         if (snapshot.state != RecordingState.Paused || trimModel.sessionId?.let { it != snapshot.session?.id } == true) trimModel.close()
         if (snapshot.state != RecordingState.Paused ||
@@ -283,14 +297,15 @@ internal fun MainActivity.CameraScreen() {
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
             // Landscape modes use safe height behind the header/mode overlays; portrait
             // video extends beneath its dock. Always fit the complete capture frame.
-            CameraPreview(recordingModel,camera,photos,displayRotation=orientation.displayRotation,gesturesEnabled=adjustments && !quick && !settings, modifier=Modifier.fillMaxSize().padding(
+            CameraPreview(recordingModel,camera,photos,displayRotation=orientation.displayRotation,gesturesEnabled=adjustments && !quick && !settings && !photoRatioMenu, modifier=Modifier.fillMaxSize().padding(
                 top=if(landscape) 0.dp else with(density) { headerHeight.toDp() },
-                bottom=if(landscape || immersiveVideo) 0.dp else with(density) { controlsHeight.toDp() },
+                bottom=if(landscape || immersiveVideo) 0.dp else with(density) { (if(fullPhotoPortrait) fullPhotoDockHeight else controlsHeight).toDp() },
                 end=if(landscape) dockWidth else 0.dp)
                 .then(if(immersiveVideo) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
                     WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 else if(landscape) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(
-                    WindowInsetsSides.Start + WindowInsetsSides.Vertical)) else Modifier))
+                    WindowInsetsSides.Start + WindowInsetsSides.Vertical))
+                else if(fullPhotoPortrait) Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)) else Modifier))
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
@@ -316,7 +331,10 @@ internal fun MainActivity.CameraScreen() {
                 CameraIconButton(CameraIcon.Settings,"Settings",settingsAllowed) { settings=true;quick=false }
                 val boundLabel=if(camera.streaming) camera.boundInfo?.concise ?: "Camera unavailable" else "Opening camera…"
                 val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else "Front camera"
-                Text(boundLabel,
+                if(photo) PhotoAspectSelector(camera.photoAspectRatio,lensLabel,granted && maySwitch && !camera.switching,
+                    photoRatioMenu,{photoRatioMenu=it;if(it) quick=false},
+                    { camera.photoAspect(it,switchAllowed()) },Modifier.weight(1f))
+                else Text(boundLabel,
                     style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).semantics { contentDescription="$lensLabel · $boundLabel" },maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 if(!photo && !arranging && review.selection==null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio)
                 CameraIconButton(CameraIcon.Quick,"Quick settings",adjustments) { quick=!quick }
@@ -340,7 +358,7 @@ internal fun MainActivity.CameraScreen() {
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
-                .then(if(immersiveVideo) Modifier.blockPreviewInput() else Modifier)
+                .then(if(immersiveVideo || fullPhotoPortrait) Modifier.blockPreviewInput() else Modifier)
                 .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
@@ -357,7 +375,7 @@ internal fun MainActivity.CameraScreen() {
                         FilterChip(selected=camera.choice.mode==mode,onClick={photos.cancelTimer();selectCamera(mode=mode)},
                             enabled=maySwitch && !camera.switching,label={Text(label)},modifier=modifier)
                     }
-                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.onSizeChanged { photoModesHeight=it.height },horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         ModeChip(CameraMode.Photo,"Photo")
                         ModeChip(CameraMode.SkitVideo,"Skit Video")
                     }
@@ -373,7 +391,7 @@ internal fun MainActivity.CameraScreen() {
                     @Composable fun PhotoLens() { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } }
                     if(landscape) {
                         PhotoRecent();PhotoShutter();PhotoLens()
-                    } else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
+                    } else Row(Modifier.fillMaxWidth().onSizeChanged { photoShutterHeight=it.height },horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
                     if(photos.countdown>0) Text("${photos.countdown} · Cancel",modifier=Modifier.semantics { contentDescription="Photo countdown ${photos.countdown}" })
                     if(photos.countdown>0) TextButton(onClick=photos::cancelTimer) { Text("Cancel timer") }
                     if(photos.canRetry) Text("Photo awaiting save",style=MaterialTheme.typography.labelSmall)

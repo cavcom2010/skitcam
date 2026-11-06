@@ -269,6 +269,8 @@ class CameraRotationDeviceTest {
                 put("autoRotate",baselineAuto).put("state",model.snapshots.value.state.name)
                 put("activeDurationMs",model.snapshots.value.activeDurationMs)
                 put("fontScale",activity.resources.configuration.fontScale)
+                put("photoAspectRatio",camera.photoAspectRatio.name)
+                activity.photoModel.frame?.let { put("photoFrame",JSONObject().put("width",it.width).put("height",it.height)) }
                 put("videoSettings",camera.video.diagnostic()).put("exposure",camera.exposure)
                 put("captureIdentity",System.identityHashCode(model.port.capture))
                 put("activityIdentity",System.identityHashCode(activity))
@@ -700,5 +702,135 @@ class CameraRotationDeviceTest {
                 File(context.filesDir,"sessions/${session.id}/session.json").readBytes())
             phase("complete")
         } finally { main { camera.timer(oldTimer) } }
+    }
+    private fun selectPhotoRatio(ratio: com.calvinmazhindu.skitcam.photo.PhotoAspectRatio) {
+        val button=touchTarget("Photo aspect ratio")
+        tap(button.exactCenterX(),button.exactCenterY())
+        val option=touchTarget("Photo ratio ${ratio.label}")
+        tap(option.exactCenterX(),option.exactCenterY())
+        await("${ratio.label} framing ready") { camera.streaming && !camera.switching && camera.photoAspectRatio==ratio &&
+            activity.photoModel.capture!=null && activity.photoModel.frame!=null }
+    }
+    private fun ratioCapture(name: String) {
+        val report=shot(name)
+        val frame=checkNotNull(activity.photoModel.frame)
+        assertEquals("FIT_CENTER",report.getString("scaleType"))
+        assertEquals(frame.aspect.toDouble(),report.getDouble("viewWidth")/report.getDouble("viewHeight"),.006)
+        for(key in listOf("preview","capture")) {
+            val resolution=report.getJSONObject(key)
+            val crop=Regex("-?\\d+").findAll(resolution.getString("cropRect")).map { it.value.toInt() }.toList()
+            val aspect=ViewfinderGeometry.aspect(crop[2]-crop[0],crop[3]-crop[1],resolution.getInt("rotationDegrees"))!!
+            assertEquals("$key selected crop",frame.aspect,aspect,if(camera.photoAspectRatio==com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.FourThree) .016f else .006f)
+        }
+        val count=activity.photoModel.saveCount
+        click("Take photo")
+        await("${camera.photoAspectRatio.label} JPEG saved") { !activity.photoModel.busy && activity.photoModel.saveCount>count }
+        val file=File(folder,"$name.jpg")
+        context.contentResolver.openInputStream(activity.photoModel.lastUri!!)!!.use { input -> file.outputStream().use { input.copyTo(it) } }
+        val facts=com.calvinmazhindu.skitcam.photo.PhotoStore(context).validate(file)
+        val swapped=facts.orientation in listOf(6,8)
+        val aspect=if(swapped) facts.height.toFloat()/facts.width else facts.width.toFloat()/facts.height
+        assertEquals("JPEG matches selected frame",frame.aspect,aspect,
+            if(camera.photoAspectRatio==com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.FourThree) .016f else .006f)
+        File(folder,"$name-jpeg.json").writeText(JSONObject().put("width",facts.width).put("height",facts.height)
+            .put("orientation",facts.orientation).put("expectedAspect",frame.aspect).put("sha256",sha(file)).toString(2))
+    }
+    @Test fun photoRatioMenuCaptureAndPersistence() {
+        check(!model.snapshots.value.openSession && !ExportJournal.busy)
+        val old=camera.photoAspectRatio
+        val timer=camera.timer
+        val session=model.snapshots.value.session
+        val raw=session?.let { File(context.filesDir,"sessions/${it.id}/session.json").readBytes() }
+        try {
+            main { camera.timer(0) }
+            for(lens in listOf(CameraLens.Rear,CameraLens.Front)) {
+                choose(CameraMode.Photo,lens)
+                for(ratio in com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.entries) {
+                    selectPhotoRatio(ratio)
+                    ratioCapture("ratio-${lens.name}-${ratio.name}-${activity.orientation.displayRotation}")
+                    val saved=ratio
+                    main { camera.photoAspect(com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.entries.first { it!=saved },false) }
+                    assertEquals("Disallowed changes cannot alter framing",saved,camera.photoAspectRatio)
+                }
+            }
+            scenario.recreate();scenario.onActivity { activity=it }
+            await("ratio after Activity recreation") { camera.streaming && activity.photoModel.frame!=null }
+            assertEquals(com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.Full,camera.photoAspectRatio)
+            lateinit var fresh: CameraModel
+            main { fresh=CameraModel(context.applicationContext as android.app.Application) }
+            await("ratio persisted") { fresh.loaded }
+            assertEquals(camera.photoAspectRatio,fresh.photoAspectRatio)
+            val fullFrame=activity.photoModel.frame
+            val fullCapture=activity.photoModel.capture
+            main { val view=preview()!!;camera.focus(view,androidx.compose.ui.geometry.Offset(view.width/2f,view.height/2f)) }
+            Thread.sleep(400)
+            assertSame("Focus feedback cannot rebind Full framing",fullCapture,activity.photoModel.capture)
+            assertEquals("Focus feedback cannot resize the crop",fullFrame,activity.photoModel.frame)
+            shot("ratio-recreated")
+            choose(CameraMode.SkitVideo,CameraLens.Rear)
+            assertNull(node("Photo aspect ratio"))
+            main { camera.photoAspect(com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.Square,true) }
+            assertEquals("Video cannot edit Photo ratio",com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.Full,camera.photoAspectRatio)
+            if(session!=null) assertArrayEquals(raw,File(context.filesDir,"sessions/${session.id}/session.json").readBytes())
+        } finally {
+            choose(CameraMode.Photo,CameraLens.Rear)
+            main { camera.photoAspect(old,true);camera.timer(timer) }
+            await("original ratio restored") { camera.streaming && camera.photoAspectRatio==old }
+        }
+    }
+    @Test fun guidedPhotoRatiosAndTimerRotation() {
+        check(args.getString("physical")=="true")
+        check(!model.snapshots.value.openSession && !ExportJournal.busy)
+        val old=camera.photoAspectRatio
+        val timer=camera.timer
+        try {
+            main { camera.timer(0) }
+            for(pose in if(args.getString("timerOnly")=="true") emptyList() else listOf(270,90)) {
+                waitPose(pose,"photo-hold-$pose")
+                for(lens in listOf(CameraLens.Rear,CameraLens.Front)) {
+                    choose(CameraMode.Photo,lens)
+                    for(ratio in com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.entries) {
+                        selectPhotoRatio(ratio)
+                        ratioCapture("ratio-${lens.name}-${ratio.name}-${pose}")
+                    }
+                }
+            }
+            choose(CameraMode.Photo,CameraLens.Rear)
+            selectPhotoRatio(com.calvinmazhindu.skitcam.photo.PhotoAspectRatio.Full)
+            waitPose(0,"hold-portrait")
+            await("Full portrait ready") { camera.streaming }
+            val capture=activity.photoModel.capture
+            val natural=activity.photoModel.frame!!.rotated(activity.orientation.displayRotation)
+            main { camera.timer(10) }
+            val count=activity.photoModel.saveCount
+            click("Take photo")
+            await("countdown started") { activity.photoModel.countdown>0 }
+            val selector=node("Photo aspect ratio")
+            assertNotNull(selector)
+            assertEquals("Ratio selection disabled during countdown",false,enabled("Photo aspect ratio"))
+            phase("turn-any-landscape")
+            await("turn during timer",9) { activity.orientation.pose in listOf(90,270) && activity.resources.configuration.orientation==2 &&
+                camera.previewDisplayRotation==activity.orientation.displayRotation && activity.photoModel.countdown>0 }
+            assertSame("Rotation must not cancel a countdown capture",capture,activity.photoModel.capture)
+            assertEquals(natural,activity.photoModel.frame!!.rotated(activity.orientation.displayRotation))
+            await("timer still saves JPEG") { !activity.photoModel.busy && activity.photoModel.saveCount>count }
+            val file=File(folder,"full-timer-rotation.jpg")
+            context.contentResolver.openInputStream(activity.photoModel.lastUri!!)!!.use { input -> file.outputStream().use { input.copyTo(it) } }
+            val facts=com.calvinmazhindu.skitcam.photo.PhotoStore(context).validate(file)
+            val expected=natural.rotated(activity.orientation.displayRotation).aspect
+            val actual=if(facts.orientation in listOf(6,8)) facts.height.toFloat()/facts.width else facts.width.toFloat()/facts.height
+            assertEquals("Countdown JPEG retains frozen framing",expected,actual,.006f)
+            File(folder,"full-timer-rotation-jpeg.json").writeText(JSONObject().put("width",facts.width).put("height",facts.height)
+                .put("orientation",facts.orientation).put("expectedAspect",expected).toString(2))
+            await("Full settles after save") { camera.streaming }
+            shot("full-after-timer-rotation")
+            waitPose(0,"return-portrait")
+            phase("complete")
+        } finally {
+            main { camera.timer(timer) }
+            if(activity.photoModel.busy) await("save before restoring ratio") { !activity.photoModel.busy }
+            main { camera.photoAspect(old,true) }
+            await("ratio restored") { camera.streaming && camera.photoAspectRatio==old }
+        }
     }
 }

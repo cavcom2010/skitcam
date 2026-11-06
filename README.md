@@ -1,8 +1,14 @@
 # SkitCam
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
+Tap **Photo · 4:3 ▾** in the header to choose **1:1, 4:3, 16:9 or Full** without
+adding a permanent control row. Full fits the available viewfinder, and saved
+JPEGs match the chosen framing. See
+[VALIDATION_PHOTO_ASPECT_RATIOS.md](VALIDATION_PHOTO_ASPECT_RATIOS.md) for device
+tests, production installation, measured bounds and preservation results.
+
 Landscape **Photo** now uses the safe-area height behind the gradient header and
-mode controls while retaining its complete 4:3 fitted frame and separate shutter
+mode controls while retaining its default 4:3 fitted frame and separate shutter
 dock. See [VALIDATION_PHOTO_LANDSCAPE_VIEWFINDER.md](VALIDATION_PHOTO_LANDSCAPE_VIEWFINDER.md)
 for before/after bounds, touch tests, JPEG comparisons and unexecuted checks.
 

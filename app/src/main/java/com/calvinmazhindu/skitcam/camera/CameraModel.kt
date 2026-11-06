@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.Observer
 import androidx.lifecycle.viewModelScope
 import com.calvinmazhindu.skitcam.recording.CameraLens
+import com.calvinmazhindu.skitcam.photo.PhotoAspectRatio
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -30,6 +31,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
     var message by mutableStateOf<String?>(null)
     var grid by mutableStateOf(false); private set
     var timer by mutableIntStateOf(0); private set
+    var photoAspectRatio by mutableStateOf(PhotoAspectRatio.FourThree); private set
     var receipt by mutableStateOf<SaveReceipt?>(null); private set
     var savedNotice by mutableStateOf<SavedVideo?>(null); private set
     var boundInfo by mutableStateOf<BoundCameraInfo?>(null); private set
@@ -67,6 +69,7 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
                 CameraLens.valueOf(prefs.getString("lens_${prefs.getString("mode", CameraMode.SkitVideo.name)}", CameraLens.Rear.name)!!)) }.getOrDefault(CameraChoice())
             grid = prefs.getBoolean("grid", false)
             timer = prefs.getInt("timer", 0).takeIf { it in listOf(0,3,10) } ?: 0
+            photoAspectRatio = PhotoAspectRatio.restored(prefs.getString("photo_aspect_ratio",null))
             acknowledgedExport = prefs.getString("acknowledged_export", null)
             receipt = runCatching { prefs.getString("video_return_v1",null)?.let(SaveReceipt::decode) }.getOrNull()
             latestTime = prefs.getLong("media_time",0L)
@@ -202,6 +205,11 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         }.onFailure { video.holdFocus(false);current.cameraControl.cancelFocusAndMetering();message="Focus hold unavailable; Auto restored." } },androidx.core.content.ContextCompat.getMainExecutor(getApplication()))
     }
     fun grid(value: Boolean) { grid = value; prefs.edit { putBoolean("grid", value) } }
+    fun photoAspect(value: PhotoAspectRatio, allowed: Boolean) {
+        if(!allowed || choice.mode!=CameraMode.Photo || switching || !streaming || value==photoAspectRatio) return
+        streaming=false;message=null;photoAspectRatio=value
+        prefs.edit { putString("photo_aspect_ratio",value.name) }
+    }
     fun timer(value: Int) { require(value in listOf(0,3,10)); timer = value; prefs.edit { putInt("timer", value) } }
     fun exportHandled(id: String) = SaveReturnPolicy.handled(id,receipt,acknowledgedExport)
     fun published(video: SavedVideo, lens: CameraLens) {

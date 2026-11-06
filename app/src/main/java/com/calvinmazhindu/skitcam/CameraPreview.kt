@@ -22,8 +22,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
@@ -32,13 +34,39 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.photo.PhotoModel
+import com.calvinmazhindu.skitcam.photo.PhotoAspectRatio
+import com.calvinmazhindu.skitcam.photo.PhotoFrame
+import com.calvinmazhindu.skitcam.photo.photoCaptureFrame
 import com.calvinmazhindu.skitcam.recording.*
+
+@Composable
+internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, photos: PhotoModel,
+    displayRotation: Int, gesturesEnabled: Boolean, modifier: Modifier = Modifier) {
+    val window=LocalWindowInfo.current.containerSize
+    val photo=cameraModel.choice.mode==CameraMode.Photo
+    val selected=cameraModel.photoAspectRatio.takeIf { photo }
+    BoxWithConstraints(modifier) {
+        val desired=selected?.frame(window.width>window.height,
+            with(LocalDensity.current) { maxWidth.roundToPx() },with(LocalDensity.current) { maxHeight.roundToPx() })
+            ?.rotated(displayRotation)?.reduced()
+        var previous by remember(cameraModel.choice,selected) { mutableStateOf(desired) }
+        val natural=desired?.let { photoCaptureFrame(previous,it,photos.busy) }
+        SideEffect { if(!photos.busy) previous=desired }
+        if(photo && natural==null) CameraMessage("Preparing photo framing…")
+        else CameraPreviewContent(model,cameraModel,photos,displayRotation,gesturesEnabled,
+            selected,natural?.rotated(displayRotation),
+            selected?.let { PhotoBindingKey(it,natural.takeIf { selected==PhotoAspectRatio.Full }) },maxWidth,maxHeight)
+    }
+}
+
+private data class PhotoBindingKey(val ratio: PhotoAspectRatio,val fullFrame: PhotoFrame?)
 
 @OptIn(ExperimentalSessionConfig::class)
 @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
 @Composable
-internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, photos: PhotoModel,
-    displayRotation: Int, gesturesEnabled: Boolean, modifier: Modifier = Modifier) {
+private fun CameraPreviewContent(model: RecordingViewModel, cameraModel: CameraModel, photos: PhotoModel,
+    displayRotation: Int, gesturesEnabled: Boolean, photoAspect: PhotoAspectRatio?, photoFrame: PhotoFrame?,
+    photoBindingKey: PhotoBindingKey?, availableWidth: Dp, availableHeight: Dp) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val choice = cameraModel.choice
@@ -47,12 +75,13 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
     val landscape = window.width > window.height
     // A new view per idle binding choice prevents accepting the previous stream's cached STREAMING event.
     val videoRevision = if(photo) 0 else cameraModel.video.revision
-    val view = remember(context, choice, videoRevision) { PreviewView(context).apply {
+    val view = remember(context, choice, videoRevision, photoBindingKey) { PreviewView(context).apply {
         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
     } }
     var attempt by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
     val currentRotation by rememberUpdatedState(displayRotation)
+    val currentPhotoFrame by rememberUpdatedState(photoFrame)
     var rotateBinding by remember(view) { mutableStateOf<((Int) -> Unit)?>(null) }
     DisposableEffect(lifecycleOwner, view, choice, attempt, videoRevision) {
         var disposed = false
@@ -150,8 +179,13 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                         .setJpegQuality(100).setResolutionSelector(resolution)
                         .setTargetRotation(currentRotation).build()
                     image = capture
+                    val frame=checkNotNull(currentPhotoFrame)
                     val group = UseCaseGroup.Builder().addUseCase(useCase).addUseCase(capture)
-                        .setViewPort(ViewPort.Builder(Rational(if(landscape) 4 else 3,if(landscape) 3 else 4),currentRotation).setScaleType(ViewPort.FIT).build()).build()
+                        .setViewPort(ViewPort.Builder(Rational(frame.width,frame.height),currentRotation)
+                            // FIT keeps the original maximum-quality 4:3 path. Other choices
+                            // intentionally crop both use cases to the same selected interval.
+                            .setScaleType(if(photoAspect==PhotoAspectRatio.FourThree) ViewPort.FIT else ViewPort.FILL_CENTER)
+                            .build()).build()
                     return cameraProvider.bindToLifecycle(lifecycleOwner,selector,group)
                 }
                 val camera = try { bind(true) } catch(first: Exception) {
@@ -160,6 +194,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                     bind(false)
                 }
                 photos.capture = image
+                if(photo) photos.frame=currentPhotoFrame
                 cameraModel.framing.bind(camera,preview,if(photo) image else videoCapture)
                 val resolution = if(photo) image?.resolutionInfo else videoCapture?.resolutionInfo
                 cameraModel.bound(camera, resolution?.resolution?.let { "${it.width} × ${it.height}" }.orEmpty() + if(photo) " · JPEG" else " · ${cameraModel.video.settings.fps?.let { "$it fps target" } ?: "Auto FPS"}", resolution?.resolution?.let { BoundCameraInfo(it.width,it.height,photo,if(photo) null else cameraModel.video.settings.fps) },resolution?.rotationDegrees ?: 0) { failure ->
@@ -175,6 +210,7 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
                     if(!disposed && !model.snapshots.value.openSession) {
                         if(preview?.targetRotation!=rotation) preview?.targetRotation=rotation
                         if(!photos.busy && image?.targetRotation!=rotation) image?.targetRotation=rotation
+                        if(photo) photos.frame=currentPhotoFrame
                         if(videoCapture?.targetRotation!=rotation) videoCapture?.targetRotation=rotation
                         cameraModel.rotated(camera.cameraInfo.getSensorRotationDegrees(rotation),rotation)
                         updateReadiness()
@@ -214,18 +250,18 @@ internal fun CameraPreview(model: RecordingViewModel, cameraModel: CameraModel, 
             preview?.let { provider?.unbind(it) }
             image?.let { provider?.unbind(it) }
             videoCapture?.let { provider?.unbind(it) }
-            if(photos.capture === image) photos.capture = null
+            if(photos.capture === image) { photos.capture = null;photos.frame=null }
             cameraModel.released()
         }
     }
-    LaunchedEffect(displayRotation,rotateBinding,photos.busy) { rotateBinding?.invoke(displayRotation) }
+    LaunchedEffect(displayRotation,rotateBinding,photos.busy,photoFrame) { rotateBinding?.invoke(displayRotation) }
     LaunchedEffect(cameraModel.video.pending,cameraModel.video.whiteBalanceStatus,cameraModel.streaming,cameraModel.zoomReady) {
         if(!photo && cameraModel.streaming) model.cameraReady=cameraModel.zoomReady && cameraModel.video.ready && model.port.profile!=null &&
             lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     }
-    BoxWithConstraints(modifier) {
-        val ratio = if(photo) { if(landscape) 4f/3f else 3f/4f } else cameraModel.videoAspect
-        val frame=ratio?.let { ViewfinderGeometry.fit(maxWidth.value,maxHeight.value,it) }
+    Box(Modifier.fillMaxSize()) {
+        val ratio = if(photo) photoFrame?.aspect else cameraModel.videoAspect
+        val frame=ratio?.let { ViewfinderGeometry.fit(availableWidth.value,availableHeight.value,it) }
         val bounds=if(frame!=null) Modifier.size(frame.width.dp,frame.height.dp) else Modifier.fillMaxSize()
         // Anchor immersive portrait video below the toolbar, exposing as much of the
         // full frame above the controls as possible. Photo/landscape retain centering.

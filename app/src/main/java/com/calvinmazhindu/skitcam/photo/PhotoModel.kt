@@ -31,6 +31,7 @@ class PhotoModel(application: Application) : AndroidViewModel(application) {
     val canRetry get() = runtime.retry != null && !busy
     val recovered get() = runtime.recovered
     var capture: ImageCapture? = null
+    var frame by mutableStateOf<PhotoFrame?>(null); internal set
     var countdown by mutableIntStateOf(0); private set
     private var timerJob: Job? = null
     fun take(seconds: Int, rotation: Int) {
