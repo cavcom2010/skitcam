@@ -41,20 +41,32 @@ object ExportJournal {
         if (read(context,session.id)!=null) return
         cancelRequested=false
         val job = JSONObject().put("version",if(session.captureProfile==null) 1 else 2).put("id",UUID.randomUUID().toString()).put("sessionId",session.id)
-            .put("state",ExportState.Preparing.name).put("ready",false).put("createdAt",System.currentTimeMillis())
+            .put("state",ExportState.Preparing.name).put("ready",false).put("createdAt",System.currentTimeMillis()).put("pathPolicy",1)
         write(context,session.id,job)
+        ExportTrace.mark(session.id,"requestCommitted")
     }
     @Synchronized fun finalised(context: Context, session: Session) {
         val job=read(context,session.id) ?: return
         if (job.optBoolean("ready")) return
         job.put("session",SessionCodec.encode(session)).put("exportProfile",session.captureProfile?.let(com.calvinmazhindu.skitcam.video.VideoJson::profile) ?: JSONObject.NULL).put("ready",true)
         write(context,session.id,job)
+        ExportTrace.mark(session.id,"snapshotReady")
     }
     @Synchronized fun update(context: Context, id: String, state: ExportState, message: String? = null, uri: String? = null) {
         val job=read(context,id) ?: error("Export journal unavailable")
         check(exportTransitionAllowed(ExportState.valueOf(job.getString("state")),state)) { "Invalid export transition." }
         job.put("state",state.name).put("message",message ?: "")
         if(uri!=null) job.put("uri",uri)
+        write(context,id,job)
+    }
+    /** Internal, bounded fallback only; user retry/publication transitions remain unchanged. */
+    @Synchronized fun fallback(context: Context, id: String, reason: String) {
+        val job=read(context,id) ?: error("Missing export")
+        check(job.getString("state") in listOf(ExportState.Exporting.name,ExportState.Verifying.name))
+        check(!job.optBoolean("renderFallbackUsed") && job.optString("selectedPath")!=ExportPath.RENDER.name)
+        check(job.optString("verifiedSha").isBlank()) { "A verified checkpoint cannot be replaced" }
+        job.put("renderFallbackUsed",true).put("fallbackReason",reason).put("selectedPath",ExportPath.RENDER.name)
+            .put("state",ExportState.Exporting.name).put("message","Retrying with the standard renderer")
         write(context,id,job)
     }
     fun restore(context: Context, session: Session) {

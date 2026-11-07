@@ -65,8 +65,15 @@ class PauseEnvironmentDeviceTest {
         assertTrue("Timed out: $message; ${if (::model.isInitialized) model.snapshots.value else "no model"}", condition())
     }
     private fun state(state: RecordingState) = await(state.name) { model.snapshots.value.state == state }
+    private fun awaitPose(pose: Int) {
+        await("stable pose $pose") {
+            var matched=false
+            scenario.onActivity { matched=it.orientation.pose==pose && CameraOrientationPolicy.matchesDisplay(pose,it.orientation.displayRotation) }
+            matched
+        }
+    }
     private fun begin(pose: Int = 0) {
-        scenario.onActivity { model.start(pose) }
+        awaitPose(pose);scenario.onActivity { model.start(pose) }
         state(RecordingState.Recording)
         await("media samples") { model.snapshots.value.activeDurationMs >= 1200 }
         model.pause(); state(RecordingState.Paused)
@@ -125,7 +132,7 @@ class PauseEnvironmentDeviceTest {
         bitmap.recycle()
     }
     private fun verifyResume(pose: Int, landscape: Boolean) {
-        model.resume(pose); state(RecordingState.Recording)
+        awaitPose(pose);model.resume(pose); state(RecordingState.Recording)
         assertNull(main { review.player })
         assertNull(main { review.selection })
         await("audio/video after review") { model.snapshots.value.activeDurationMs >= 1200 }
@@ -134,7 +141,7 @@ class PauseEnvironmentDeviceTest {
         // Retain an overflowing fixture so scrolling remains genuinely exercised.
         val expectedCount=if(landscape) 8 else 6
         repeat(expectedCount-2) {
-            model.resume(pose); state(RecordingState.Recording)
+            awaitPose(pose);model.resume(pose); state(RecordingState.Recording)
             await("additional scroll fixture") { model.snapshots.value.activeDurationMs >= 1200 }
             model.pause(); state(RecordingState.Paused)
         }

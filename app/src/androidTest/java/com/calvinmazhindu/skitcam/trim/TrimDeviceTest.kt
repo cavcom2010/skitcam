@@ -85,11 +85,18 @@ class TrimDeviceTest {
         assertTrue("Timed out: $message; ${if (::model.isInitialized) model.snapshots.value else "no model"}; editor=${if (::trim.isInitialized) main { "ready=${trim.ready}, draft=${trim.draft}, error=${trim.error}, player=${review.player?.playbackState}, playback=${review.error}" } else "unbound"}", condition())
     }
     private fun state(state: RecordingState) = await(state.name) { model.snapshots.value.state == state }
+    private fun awaitPose(pose: Int) {
+        await("stable pose $pose") {
+            var matched=false
+            scenario.onActivity { matched=it.orientation.pose==pose && com.calvinmazhindu.skitcam.recording.CameraOrientationPolicy.matchesDisplay(pose,it.orientation.displayRotation) }
+            matched
+        }
+    }
     private fun record(count: Int, pose: Int = 0) {
-        model.start(pose); state(RecordingState.Recording)
+        awaitPose(pose);model.start(pose); state(RecordingState.Recording)
         owned = model.snapshots.value.session!!.id
         repeat(count) { index ->
-            if (index > 0) { model.resume(pose); state(RecordingState.Recording) }
+            if (index > 0) { awaitPose(pose);model.resume(pose); state(RecordingState.Recording) }
             await("recorded samples") { model.snapshots.value.activeDurationMs >= 3000 }
             model.pause(); state(RecordingState.Paused)
         }
@@ -149,7 +156,7 @@ class TrimDeviceTest {
     }
     private fun metadata() = File(context.filesDir, "sessions/${owned!!}/session.json").readText()
     private fun finishAndVerify(pose: Int, arranged: List<String>, history: List<Segment>) {
-        model.resume(pose); state(RecordingState.Recording)
+        awaitPose(pose);model.resume(pose); state(RecordingState.Recording)
         assertNull(main { review.player }); assertNull(main { editor.draft })
         await("audio/video after arranging") { model.snapshots.value.activeDurationMs >= 3000 }
         model.stop(); state(RecordingState.Completed)

@@ -70,6 +70,7 @@ class CameraRecordingPort(private val context: Context, private val events: Exec
                                     event.recordingStats.audioStats.audioState != AudioStats.AUDIO_STATE_ACTIVE))
                             }
                             is VideoRecordEvent.Finalize -> {
+                                com.calvinmazhindu.skitcam.export.ExportTrace.mark(File(pending.path).parentFile?.name,"cameraXFinalized")
                                 Log.i("SkitCam", "Segment finalised: error=${event.error}, file=${pending.path}")
                                 main.execute { recording = null; activeStop = null; audio.finish(pending.id) }
                                 listener(RecorderEvent.Finalized(event.recordingStats.recordedDurationNanos / 1_000_000,

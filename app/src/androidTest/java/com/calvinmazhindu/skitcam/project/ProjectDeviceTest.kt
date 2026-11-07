@@ -92,7 +92,7 @@ class ProjectDeviceTest {
         } finally { camera.close() }
     }
     @Before fun guard() {
-        check(context.packageName.endsWith(".m11validation"))
+        check(context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
     }
     @Test fun systemPickerCreatesVerifiedPortableProjectAndCameraStillRecords() {

@@ -195,8 +195,13 @@ internal fun MainActivity.CameraScreen() {
         }
     }
     LaunchedEffect(camera.receipt,cameraReady,camera.streaming,exportBusy) {
-        if(cameraReady && camera.streaming && !exportBusy && camera.receipt?.video?.sessionId==snapshot.session?.id && !snapshot.openSession)
+        if(cameraReady && camera.streaming && !exportBusy && camera.receipt?.video?.sessionId==snapshot.session?.id && !snapshot.openSession) {
             camera.cameraReturned()
+            snapshot.session?.id?.let { id ->
+                ExportTrace.mark(id,"cameraReady")
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ExportTrace.flush(this@CameraScreen,id) }
+            }
+        }
     }
     LaunchedEffect(camera.savedNotice) {
         val notice=camera.savedNotice ?: return@LaunchedEffect

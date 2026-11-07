@@ -49,7 +49,8 @@ internal fun inspect(file: File): Geometry {
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-internal fun transform(context: Context, spec: ExportSpec, output: File, onProgress: (Int?) -> Unit = {}) {
+internal fun transform(context: Context, spec: ExportSpec, output: File, traceId: String? = null,
+    videoPassthrough: Boolean = false, onProgress: (Int?) -> Unit = {}) {
     val sizes=spec.clips.map { inspect(File(it.path)) }
     val first=sizes.first()
     require(sizes.all { kotlin.math.abs(it.width.toDouble()/it.height-first.width.toDouble()/first.height)<0.005 }) { "Segments have incompatible display aspect ratios." }
@@ -67,11 +68,11 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
         }
         val item=MediaItem.Builder().setUri(Uri.fromFile(File(clip.path)))
             .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(clip.range.trimStartMs).setEndPositionMs(clip.range.trimEndMs).build()).build()
-        val videoEffects=mutableListOf<androidx.media3.common.Effect>(Presentation.createForWidthAndHeight(width,height,Presentation.LAYOUT_SCALE_TO_FIT))
+        val videoEffects=if(videoPassthrough) emptyList() else listOf<androidx.media3.common.Effect>(Presentation.createForWidthAndHeight(width,height,Presentation.LAYOUT_SCALE_TO_FIT))
         EditedMediaItem.Builder(item).apply { if(matching==null) setFrameRate(30) }.setEffects(Effects(listOf(channels,sonic),videoEffects)).build()
     }
     val composition=Composition.Builder(EditedMediaItemSequence.withAudioAndVideoFrom(items))
-        .setTransmuxAudio(false).setTransmuxVideo(false).build()
+        .setTransmuxAudio(false).setTransmuxVideo(videoPassthrough).build()
     val thread=HandlerThread("SkitCam export").apply { start() };val handler=Handler(thread.looper)
     val finished=CountDownLatch(1);var failure: Exception?=null;var transformer: Transformer?=null
     handler.post {
@@ -81,15 +82,15 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
                 .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(128_000).setProfile(MediaCodecInfo.CodecProfileLevel.AACObjectLC).build()).build()
             val factory=object : Codec.EncoderFactory by delegate {
                 override fun audioNeedsEncoding()=true
-                override fun videoNeedsEncoding()=true
+                override fun videoNeedsEncoding()=!videoPassthrough
             }
             transformer=Transformer.Builder(context).setLooper(thread.looper).setEncoderFactory(factory)
                 .setAssetLoaderFactory(LeadingAudioGapFactory(context))
                 .setVideoMimeType(MimeTypes.VIDEO_H264).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, result: ExportResult) { finished.countDown() }
+                    override fun onCompleted(composition: Composition, result: ExportResult) { ExportTrace.mark(traceId,"transformCompleted");finished.countDown() }
                     override fun onError(composition: Composition, result: ExportResult, exception: ExportException) { failure=exception;finished.countDown() }
-                }).build().also { it.start(composition,output.path) }
+                }).build().also { ExportTrace.mark(traceId,"transformStarted");it.start(composition,output.path) }
         } catch(e: Exception) { failure=e;finished.countDown() }
     }
     try {
@@ -114,11 +115,12 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, onProgr
 }
 
 /** Full decode without speaker playback or retaining decoded frames. */
-internal fun verify(file: File, expectedMs: Long, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
+internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
     inspect(file)
     val spans=mutableListOf<Pair<Long,Long>>()
     val measured=JSONArray()
     for(type in listOf("video/","audio/")) {
+        val decodeStart=ExportTrace.now()
         val extractor=MediaExtractor();var codec: MediaCodec?=null
         try {
             extractor.setDataSource(file.path)
@@ -172,7 +174,7 @@ internal fun verify(file: File, expectedMs: Long, diagnostic: (JSONObject) -> Un
                 .put("decodedBuffers",trace.buffers).put("decodedPcmFrames",if(type=="audio/") pcmFrames else JSONObject.NULL)
                 .put("decodedPcmEndExclusiveUs",pcmEnd ?: JSONObject.NULL)
                 .put("reportedTrackDurationUs",if(format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else JSONObject.NULL))
-        } finally { codec?.release();extractor.release() }
+        } finally { codec?.release();extractor.release();ExportTrace.duration(traceId,"decode_$type",decodeStart) }
     }
     val duration=inspect(file).duration
     val timing=JSONObject().put("expectedMs",expectedMs).put("containerMs",duration).put("tracks",measured)
@@ -180,5 +182,7 @@ internal fun verify(file: File, expectedMs: Long, diagnostic: (JSONObject) -> Un
     diagnostic(timing)
     require(kotlin.math.abs(duration-expectedMs)<=100) { "Output duration differs: expected $expectedMs ms, got $duration ms." }
     require(kotlin.math.abs(spans[0].second-spans[1].second)<=100_000 && kotlin.math.abs(spans[0].first-spans[1].first)<=100_000) { "Output audio/video timing differs by over 100 ms." }
-    return JSONObject().put("sha256",sha(file)).put("durationMs",duration).put("timing",timing)
+    val digest=ExportTrace.measure(traceId,"outputHash") { sha(file) }
+    ExportTrace.bytes(traceId,"outputHashRead",file.length())
+    return JSONObject().put("sha256",digest).put("durationMs",duration).put("timing",timing)
 }

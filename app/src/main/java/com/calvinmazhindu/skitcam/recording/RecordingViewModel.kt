@@ -43,7 +43,7 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     fun start(orientation: Int?) = runtime.start(orientation)
     fun resume(orientation: Int?) = runtime.resume(orientation)
     fun pause() = runtime.pause()
-    fun stop() = runtime.stop()
+    fun stop(origin: String = "command", startedNanos: Long = android.os.SystemClock.elapsedRealtimeNanos()) = runtime.stop(origin, startedNanos)
     fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) =
         runtime.setSegmentKept(sessionId, segmentId, kept, finished)
     fun savePlaybackOrder(sessionId: String, expected: List<String>, order: List<String>, finished: (SegmentEditResult) -> Unit) =
@@ -91,6 +91,7 @@ private class RecordingRuntime(private val application: Application) {
             }
         }, changed = {
             state.value = it
+            if (it.state == RecordingState.Completed) ExportTrace.mark(it.session?.id, "sessionCommitted")
             if(it.state in setOf(RecordingState.Completed,RecordingState.Error)) it.session?.let { session ->
                 try { ExportJournal.finalised(application,session) } catch(_: Exception) { }
             }
@@ -114,8 +115,12 @@ private class RecordingRuntime(private val application: Application) {
     }
     fun resume(orientation: Int?) = worker.execute { engine.resume(orientation,port.profile) }
     fun pause() = worker.execute { engine.pause() }
-    fun stop() = worker.execute {
+    fun stop(origin: String, startedNanos: Long) {
+        state.value.takeIf { it.state in setOf(RecordingState.Paused, RecordingState.Recording) }
+            ?.session?.let { ExportTrace.begin(it.id, origin, startedNanos) }
+        worker.execute {
         val session=engine.snapshot.session
+        ExportTrace.mark(session?.id, "stopWorker")
         if(session!=null && engine.snapshot.state in setOf(RecordingState.Paused,RecordingState.Recording) && !ExportJournal.busy) {
             try {
                 ExportJournal.request(application,session)
@@ -127,6 +132,7 @@ private class RecordingRuntime(private val application: Application) {
             } catch(_: Exception) { ExportJournal.busy=false }
         }
         engine.stop()
+        }
     }
     fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) {
         worker.execute {

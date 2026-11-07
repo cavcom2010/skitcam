@@ -254,6 +254,7 @@ private fun CameraPreviewContent(model: RecordingViewModel, cameraModel: CameraM
             preview?.let { provider?.unbind(it) }
             image?.let { provider?.unbind(it) }
             videoCapture?.let { provider?.unbind(it) }
+            com.calvinmazhindu.skitcam.export.ExportTrace.mark(model.snapshots.value.session?.id,"cameraUnbindRequested")
             if(photos.capture === image) { photos.capture = null;photos.frame=null }
             cameraModel.released()
         }

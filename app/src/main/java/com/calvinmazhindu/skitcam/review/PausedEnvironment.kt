@@ -101,7 +101,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                 Column(Modifier.weight(1f)) {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                         if (segment != null) ReviewPanel(session, segment, model, review,
-                            onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment))
+                            onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment), horizontal = true)
                     }
                     LazyRow(Modifier.fillMaxWidth().height(112.dp).background(Color.Black.copy(alpha = 0.55f))
                         .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
@@ -200,70 +200,110 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
 @Composable
 internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
     review: SegmentReviewController, readOnly: Boolean = false, onTrim: (() -> Unit)? = null,
-    onPlayFrom: (() -> Unit)? = null) {
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(4.dp)) {
-        val videoHeight = (maxHeight * 0.45f).coerceIn(64.dp, 240.dp)
-        Surface(color = Color(0xF218181E), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
-            Column(Modifier.fillMaxWidth().padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(if (readOnly) "Preview segment ${segment.order}" else
-                    "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
-                    style = MaterialTheme.typography.titleSmall)
-                Text(if (segment.invalidTrimJson != null) "Trim needs attention" else
-                    "${segment.displayDurationMs} ms${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
-                    style = MaterialTheme.typography.labelSmall)
-                val player = review.player
-                if (player != null) {
-                    AndroidView(factory = { context ->
-                        (LayoutInflater.from(context).inflate(R.layout.segment_player, FrameLayout(context), false) as PlayerView).apply {
-                            setShowNextButton(false)
-                            setShowPreviousButton(false)
-                            setShowFastForwardButton(false)
-                            setShowRewindButton(false)
-                            contentDescription = "Segment ${segment.order} playback"
-                            controllerShowTimeoutMs = 0
-                            this.player = player
+    onPlayFrom: (() -> Unit)? = null, horizontal: Boolean = false) {
+    if (horizontal) {
+        Surface(Modifier.fillMaxSize().padding(4.dp), color = Color(0xF218181E), contentColor = Color.White,
+            shape = MaterialTheme.shapes.medium) {
+            Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.weight(0.62f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                }
+                Column(Modifier.weight(0.38f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { ReviewHeader(segment, readOnly) }
+                        TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC))) {
+                            Text(if (readOnly) "Back to Arrange" else "Close")
                         }
-                    }, update = { it.player = player }, onRelease = { it.player = null },
-                        modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = videoHeight))
-                    Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!readOnly) {
-                    if (onTrim != null) TextButton(onClick = onTrim, enabled = !review.saving,
-                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Trim") }
-                    if (segment.kept) {
-                        Button(onClick = { review.decide(model, false) }, enabled = !review.saving,
-                            modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Discard") }
-                    } else {
-                        Button(onClick = { review.decide(model, true) }, enabled = !review.saving,
-                            modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Restore") }
                     }
-                    if (segment.kept && onPlayFrom != null) TextButton(onClick = onPlayFrom, enabled = !review.saving,
-                        modifier = Modifier.heightIn(min = 48.dp)) { Text("Play from here") }
+                    if (review.player != null) Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
+                    ReviewActions(session, segment, model, review, readOnly, onTrim, onPlayFrom, showClose = false)
+                }
+            }
+        }
+    } else {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(4.dp)) {
+            val videoHeight = (maxHeight * 0.45f).coerceIn(64.dp, 240.dp)
+            Surface(color = Color(0xF218181E), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
+                Column(Modifier.fillMaxWidth().padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ReviewHeader(segment, readOnly)
+                    if (review.player != null) {
+                        ReviewPlayer(segment, review, Modifier.fillMaxWidth().height(videoHeight))
+                        Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
                     }
-                    TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
-                        contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (readOnly) "Back to Arrange" else "Close") }
+                    ReviewActions(session, segment, model, review, readOnly, onTrim, onPlayFrom)
                 }
-                if (!segment.kept && session.retainedCount >= RecordingEngine.MAX_SEGMENTS) {
-                    Text("100 kept segments. Discard another to restore this one.", style = MaterialTheme.typography.bodySmall)
-                }
-                review.error?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFF2D4BC),
-                        modifier = Modifier.heightIn(max = 72.dp).verticalScroll(rememberScrollState())
-                            .semantics { liveRegion = LiveRegionMode.Polite })
-                }
-                val message = if (review.saving) "Saving decision…" else review.feedback
-                if (message != null) Text(message, style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFF2D4BC), textAlign = TextAlign.Start,
-                    modifier = Modifier.heightIn(max = 48.dp).verticalScroll(rememberScrollState())
-                        .semantics { liveRegion = LiveRegionMode.Polite })
             }
         }
     }
+}
+
+@Composable
+private fun ReviewHeader(segment: Segment, readOnly: Boolean) {
+    Text(if (readOnly) "Preview segment ${segment.order}" else
+        "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
+        style = MaterialTheme.typography.titleSmall)
+    Text(if (segment.invalidTrimJson != null) "Trim needs attention" else
+        "${segment.displayDurationMs} ms${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
+        style = MaterialTheme.typography.labelSmall)
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun ReviewPlayer(segment: Segment, review: SegmentReviewController, modifier: Modifier) {
+    val player = review.player ?: return
+    AndroidView(factory = { context ->
+        (LayoutInflater.from(context).inflate(R.layout.segment_player, FrameLayout(context), false) as PlayerView).apply {
+            setShowNextButton(false)
+            setShowPreviousButton(false)
+            setShowFastForwardButton(false)
+            setShowRewindButton(false)
+            contentDescription = "Segment ${segment.order} playback"
+            controllerShowTimeoutMs = 0
+            this.player = player
+        }
+    }, update = { it.player = player }, onRelease = { it.player = null }, modifier = modifier)
+}
+
+@Composable
+private fun ReviewActions(session: Session, segment: Segment, model: RecordingViewModel,
+    review: SegmentReviewController, readOnly: Boolean, onTrim: (() -> Unit)?,
+    onPlayFrom: (() -> Unit)?, showClose: Boolean = true) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (!readOnly) {
+            if (onTrim != null) TextButton(onClick = onTrim, enabled = !review.saving,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Trim") }
+            if (segment.kept) {
+                Button(onClick = { review.decide(model, false) }, enabled = !review.saving,
+                    modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
+                    contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Discard") }
+            } else {
+                Button(onClick = { review.decide(model, true) }, enabled = !review.saving,
+                    modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
+                    contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Restore") }
+            }
+            if (segment.kept && onPlayFrom != null) TextButton(onClick = onPlayFrom, enabled = !review.saving,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("Play from here") }
+        }
+        if (showClose) TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
+            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
+            contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (readOnly) "Back to Arrange" else "Close") }
+    }
+    if (!segment.kept && session.retainedCount >= RecordingEngine.MAX_SEGMENTS) {
+        Text("100 kept segments. Discard another to restore this one.", style = MaterialTheme.typography.bodySmall)
+    }
+    review.error?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFF2D4BC),
+            modifier = Modifier.heightIn(max = 72.dp).verticalScroll(rememberScrollState())
+                .semantics { liveRegion = LiveRegionMode.Polite })
+    }
+    val message = if (review.saving) "Saving decision…" else review.feedback
+    if (message != null) Text(message, style = MaterialTheme.typography.bodySmall,
+        color = Color(0xFFF2D4BC), textAlign = TextAlign.Start,
+        modifier = Modifier.heightIn(max = 48.dp).verticalScroll(rememberScrollState())
+            .semantics { liveRegion = LiveRegionMode.Polite })
 }

@@ -125,9 +125,9 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
             else -> CircularProgressIndicator(Modifier.size(36.dp).semantics { contentDescription=snapshot.state.name })
         }
         if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed)) {
-            if(snapshot.state==RecordingState.Recording) IconButton(onClick={releaseReview();model.stop()},modifier=Modifier.size(48.dp)
+            if(snapshot.state==RecordingState.Recording) IconButton(onClick={val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap)},modifier=Modifier.size(48.dp)
                 .semantics { contentDescription="Stop recording" }) { CameraSymbol(CameraIcon.Stop) }
-            else OutlinedButton(onClick={releaseReview();model.stop()},enabled=!snapshot.unresolved && snapshot.state in setOf(RecordingState.Error,RecordingState.Paused),
+            else OutlinedButton(onClick={val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap)},enabled=!snapshot.unresolved && snapshot.state in setOf(RecordingState.Error,RecordingState.Paused),
                 modifier=Modifier.heightIn(min=48.dp).semantics { contentDescription="Stop recording" }) { Text("STOP") }
         }
         if (snapshot.state == RecordingState.Paused) {

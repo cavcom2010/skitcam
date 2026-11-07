@@ -30,6 +30,8 @@ class ExportService : Service() {
         if(intent.action=="cancel") { if(sessionId==id) ExportJournal.cancelRequested=true;return START_NOT_STICKY }
         if(!running.compareAndSet(false,true)) return START_NOT_STICKY
         sessionId=id;ExportJournal.busy=true
+        ExportTrace.begin(id,"service")
+        ExportTrace.mark(id,"serviceStart")
         val manager=getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("finishing","Finishing videos",NotificationManager.IMPORTANCE_LOW))
         val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -48,7 +50,12 @@ class ExportService : Service() {
             val directory=ExportJournal.directory(this,id)
             var job=ExportJournal.read(this,id) ?: error("Export request unavailable")
             if(job.getString("state") in setOf(ExportState.Completed.name,ExportState.Empty.name)) return
-            if(job.getString("state") in setOf(ExportState.Failed.name,ExportState.Cancelled.name)) ExportJournal.update(this,id,ExportState.Preparing)
+            if(job.getString("state") in setOf(ExportState.Failed.name,ExportState.Cancelled.name)) {
+                ExportJournal.update(this,id,ExportState.Preparing)
+                // Freeze sources/spec onto the current Preparing journal, never write the
+                // stale Failed/Cancelled state back after a cancellation before hashing.
+                job=ExportJournal.read(this,id)!!
+            }
             val deadline=System.nanoTime()+40_000_000_000L
             while(!job.optBoolean("ready")) {
                 check(System.nanoTime()<deadline) { "Recording did not finalise. Sources are retained." }
@@ -56,6 +63,7 @@ class ExportService : Service() {
             }
             checkCancelled()
             val session=SessionCodec.decode(job.getString("session"))
+            ExportTrace.mark(id,"serviceSnapshotReady")
             val sessionRoot=java.io.File(filesDir,"sessions/$id").canonicalFile
             session.segments.forEach { segment ->
                 val source=java.io.File(segment.path).canonicalFile
@@ -68,14 +76,16 @@ class ExportService : Service() {
                 ExportSpec(id,session.orientationDegrees,List(a.length()) { index -> a.getJSONObject(index).let {
                     ExportClip(it.getString("id"),it.getString("path"),com.calvinmazhindu.skitcam.trim.TrimRange(it.getLong("duration"),it.getLong("start"),it.getLong("end")))
                 } },outputProfile)
-            } else ExportSpec.from(session) { inspect(File(it.path)).duration }.copy(captureProfile=outputProfile)
+            } else ExportTrace.measure(id,"specInspection") { ExportSpec.from(session) { inspect(File(it.path)).duration }.copy(captureProfile=outputProfile) }
             require(spec.clips.map { it.id }==session.playbackOrder && spec.clips.all { clip ->
                 clip.range.valid() && session.segments.any { it.id==clip.id && it.path==clip.path }
             }) { "Saved export specification is invalid." }
             if(spec.clips.isEmpty()) { ExportJournal.update(this,id,ExportState.Empty,"No retained segments. Original files are preserved.");return }
             if(!job.has("sources")) {
                 val sources=JSONArray()
-                spec.clips.forEach { clip -> checkCancelled();sources.put(JSONObject().put("id",clip.id).put("sha256",sha(File(clip.path)))) }
+                ExportTrace.measure(id,"sourceHashSnapshot") {
+                    spec.clips.forEach { clip -> checkCancelled();sources.put(JSONObject().put("id",clip.id).put("sha256",sha(File(clip.path))));ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length()) }
+                }
                 job.put("sources",sources).put("spec",JSONArray().apply {
                     spec.clips.forEach { put(JSONObject().put("id",it.id).put("path",it.path).put("duration",it.range.sourceDurationMs).put("start",it.range.trimStartMs).put("end",it.range.trimEndMs)) }
                 })
@@ -84,42 +94,35 @@ class ExportService : Service() {
             val candidate=File(directory,"output.mp4")
             val verified=job.optString("verifiedSha")
             if(verified.isBlank() || !candidate.isFile || sha(candidate)!=verified) {
-                spec.clips.forEachIndexed { index, clip ->
-                    check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source segment changed. Export not started." }
+                if(verified.isNotBlank()) {
+                    job.put("invalidCheckpointSha",verified).remove("verifiedSha")
+                    job.remove("verification");ExportJournal.write(this,id,job)
                 }
+                ExportTrace.measure(id,"sourceHashRecheck") { spec.clips.forEachIndexed { index, clip ->
+                    check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source segment changed. Export not started." }
+                    ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length())
+                } }
                 val required=outputProfile?.takeUnless { it.legacy }?.let { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.reserveBytes(spec.durationMs,it.width,it.height,it.settings.fps) }
                     ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
-                check(directory.usableSpace>required) { "Insufficient space for finishing and gallery copy." }
+                check(ExportProcessor.freeBytes(this,directory)>required) { "Insufficient space for finishing and gallery copy." }
                 check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
                 ExportJournal.update(this,id,ExportState.Exporting)
                 val cameraDeadline=System.nanoTime()+10_000_000_000L
+                val cameraWaitStart=ExportTrace.now()
                 while(!RecordingViewModel.cameraReleasedForExport()) {
                     check(System.nanoTime()<cameraDeadline) { "Camera is still in use. Retry when recording has closed." }
                     checkCancelled();Thread.sleep(50)
                 }
-                transform(this,spec,candidate) { percent ->
-                    val current=ExportJournal.status.value
-                    if(current?.sessionId==id && current.state==ExportState.Exporting) ExportJournal.status.value=current.copy(message=percent?.let { "Encoding · $it%" } ?: "Encoding video")
-                }
-                ExportJournal.update(this,id,ExportState.Verifying)
-                outputProfile?.takeUnless { it.legacy }?.let { profile ->
-                    val geometry=inspect(candidate)
-                    require(maxOf(geometry.width,geometry.height)==maxOf(profile.width,profile.height) && minOf(geometry.width,geometry.height)==minOf(profile.width,profile.height)) { "Export resolution does not match the saved profile." }
-                    val sourceDisplay=inspect(File(spec.clips.first().path))
-                    require(geometry.width==sourceDisplay.width && geometry.height==sourceDisplay.height) { "Export display orientation does not match the source session." }
-                }
-                val report=verify(candidate,spec.durationMs) { timing ->
-                    val checkpoint=ExportJournal.read(this,id)!!
-                    checkpoint.put("timingDiagnostic",timing)
-                    ExportJournal.write(this,id,checkpoint)
-                }
+                ExportTrace.duration(id,"cameraReleaseWait",cameraWaitStart)
+                val report=ExportProcessor.process(this,id,spec,candidate,required)
                 job=ExportJournal.read(this,id)!!;job.put("verifiedSha",report.getString("sha256")).put("verification",report)
                 ExportJournal.write(this,id,job)
             }
             checkCancelled()
             ExportJournal.update(this,id,ExportState.Publishing)
-            val uri=publish(this,id,candidate,job.getString("id"))
+            val uri=ExportTrace.measure(id,"publication") { publish(this,id,candidate,job.getString("id")) }
             ExportJournal.update(this,id,ExportState.Completed,"Saved to Movies/SkitCam",uri.toString())
+            ExportTrace.mark(id,"published")
         } catch(e: Exception) {
             android.util.Log.e("SkitCamExport","Export failed",e)
             try { ExportJournal.update(this,id,if(ExportJournal.cancelRequested) ExportState.Cancelled else ExportState.Failed,
@@ -127,6 +130,8 @@ class ExportService : Service() {
         } finally {
             if(wakeLock?.isHeld==true) wakeLock.release()
             ExportJournal.busy=false;running.set(false)
+            ExportTrace.mark(id,"serviceIdle")
+            ExportTrace.flush(this,id)
             stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
         }
     }

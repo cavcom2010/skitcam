@@ -40,7 +40,7 @@ class VideoDeviceTest {
         assertTrue("$label: ${video.message}; ${camera.message}; ${model.snapshots.value}; ${ExportJournal.status.value}",block())
     }
     @Before fun open() {
-        check((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation")))))
+        check(context.packageName.endsWith(".m12bvalidation") || (context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation")))))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         originalRotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)

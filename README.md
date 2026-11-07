@@ -615,3 +615,10 @@ See [VALIDATION_M6.md](VALIDATION_M6.md) for the export architecture, test evide
 and remaining limitations. Final output verification includes streaming full-track
 decoding and timestamp checks; those checks alone cannot prove every scene or
 subjective lip-sync result.
+
+M12B adds gated fast paths for compatible untrimmed clips: verified direct copy for
+one fully conforming source, and encoded-video passthrough with the existing
+48 kHz stereo audio renderer for compatible multi-clip skits. Trims, incompatible
+codec configuration, uncertain timestamps and legacy jobs remain on the standard
+renderer. See [VALIDATION_M12B.md](VALIDATION_M12B.md) for measured latency,
+eligibility rules, fallback/recovery tests and preservation results.

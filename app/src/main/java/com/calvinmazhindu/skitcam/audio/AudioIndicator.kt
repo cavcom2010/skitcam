@@ -21,10 +21,13 @@ fun AudioIndicator(monitor: AudioMonitor, modifier: Modifier=Modifier) {
     LaunchedEffect(audio.health) { while(audio.health==CaptureHealth.Active) { now=SystemClock.elapsedRealtime();delay(250) } }
     val peak=audio.visiblePeak(now)
     val problem=!audio.permission || audio.systemMuted || AudioPolicy.captureFailure(audio.health) || audio.warning!=null
-    Column(modifier.width(48.dp)) {
+    // Reserve the meter row permanently. Adding/removing it during capture changed
+    // the header height and made the top controls visibly jump while recording.
+    Column(modifier.width(48.dp).height(51.dp)) {
         CameraIconButton(if(problem) CameraIcon.MicOff else CameraIcon.Microphone,"Audio input details. ${audio.title}") { details=true }
         if(audio.health==CaptureHealth.Active && peak!=null) LinearProgressIndicator(progress={peak.toFloat()},modifier=Modifier.fillMaxWidth().height(3.dp)
             .semantics { contentDescription="Sampled microphone peak level; input identity unverified" })
+        else Spacer(Modifier.fillMaxWidth().height(3.dp))
     }
     if(details) AudioDetails(audio) { details=false }
 }
