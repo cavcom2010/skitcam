@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.*
+import com.calvinmazhindu.skitcam.BuildConfig
 import com.calvinmazhindu.skitcam.video.SegmentMediaFacts
 import com.calvinmazhindu.skitcam.audio.*
 import kotlin.math.roundToInt
@@ -116,7 +117,7 @@ fun CameraTools(model: CameraModel, full: Boolean, adjustmentsEnabled: Boolean, 
                     Text(video.stabilizationStatus)
                     observed?.let { Text("Last clip: ${it.width} × ${it.height}, ${it.averageFps?.let { fps -> "%.2f fps measured".format(fps) } ?: "cadence unavailable"}; ${it.averageVideoBitrate/1000} kbps video payload.") }
                     Text("Session profiles remain locked through pause and recovery. Focus/zoom reset on camera changes; saved selfies are unmirrored. Original segments and metadata are retained.")
-                    Text("SkitCam · 0.10.0")
+                    Text("SkitCam · ${BuildConfig.VERSION_NAME}")
                 }
             }
         }

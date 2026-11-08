@@ -2,8 +2,14 @@ package com.calvinmazhindu.skitcam.project
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.net.Uri
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -30,6 +36,41 @@ class ProjectDeviceTest {
         while(!condition() && System.nanoTime()<end) Thread.sleep(100)
         assertTrue(label,condition())
     }
+    private fun cameraDiagnostics(activity: MainActivity): String {
+        val bound = runCatching {
+            ProcessCameraProvider.getInstance(context).get().isBound(activity.recordingModel.port.capture)
+        }.getOrElse { "error=${it.message}" }
+        return listOf(
+            "cameraReady=${activity.recordingModel.cameraReady}",
+            "pose=${activity.orientation.pose}",
+            "streaming=${activity.cameraModel.streaming}",
+            "cameraBound=$bound",
+            "engineState=${activity.recordingModel.snapshots.value.state}",
+            "commandPending=${activity.recordingModel.commandPending.value}",
+            "exportBusy=${ExportJournal.busy}",
+            "lifecycle=${activity.lifecycle.currentState}",
+            "cameraPermission=${ContextCompat.checkSelfPermission(context,Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED}",
+            "switching=${activity.cameraModel.switching}",
+            "videoPending=${activity.cameraModel.video.pending}",
+            "videoReady=${activity.cameraModel.video.ready}",
+            "videoMessage=${activity.cameraModel.video.message}",
+            "videoDiagnostic=${activity.cameraModel.video.diagnostic()}",
+            "portProfile=${activity.recordingModel.port.profile}",
+            "zoomReady=${activity.cameraModel.zoomReady}",
+            "choice=${activity.cameraModel.choice}",
+            "cameraMessage=${activity.cameraModel.message}"
+        ).joinToString(", ")
+    }
+    private fun awaitCamera(label: String,seconds: Int=90,activity: ()->MainActivity,condition: ()->Boolean) {
+        val end=System.nanoTime()+seconds*1_000_000_000L
+        while(!condition() && System.nanoTime()<end) Thread.sleep(100)
+        if(!condition()) {
+            val diagnostics=cameraDiagnostics(activity())
+            File(context.filesDir,"validation-m11").mkdirs()
+            File(context.filesDir,"validation-m11/camera-return-diagnostics.txt").writeText(diagnostics)
+            fail("$label: $diagnostics")
+        }
+    }
     private fun find(label: String): AccessibilityNodeInfo? {
         inst.uiAutomation.clearCache()
         fun walk(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -46,6 +87,31 @@ class ProjectDeviceTest {
             n?.isClickable==true && n?.isEnabled==true
         }
         assertTrue("Clickable $label",n!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+    }
+    private fun pickerRoot(label: String): AccessibilityNodeInfo {
+        val end=System.nanoTime()+30_000_000_000L
+        while(System.nanoTime()<end) {
+            inst.uiAutomation.clearCache()
+            fun walk(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+                if(n.isVisibleToUser && n.text?.toString()==label && n.viewIdResourceName?.endsWith("android:id/title")==true) return n
+                for(i in 0 until n.childCount) n.getChild(i)?.let { walk(it)?.let { found -> return found } }
+                return null
+            }
+            inst.uiAutomation.rootInActiveWindow?.let(::walk)?.let { return it }
+            Thread.sleep(150)
+        }
+        error("Picker root missing: $label")
+    }
+    private fun tap(node: AccessibilityNodeInfo) {
+        val bounds=Rect();node.getBoundsInScreen(bounds)
+        val down=SystemClock.uptimeMillis()
+        val x=bounds.exactCenterX();val y=bounds.exactCenterY()
+        for(event in listOf(
+            MotionEvent.obtain(down,down,MotionEvent.ACTION_DOWN,x,y,0),
+            MotionEvent.obtain(down,down+80,MotionEvent.ACTION_UP,x,y,0)
+        )) {
+            assertTrue(inst.uiAutomation.injectInputEvent(event,true));event.recycle()
+        }
     }
     private fun shot(name: String) {
         val dir=File(context.filesDir,"validation-m11").apply { mkdirs() }
@@ -92,7 +158,9 @@ class ProjectDeviceTest {
         } finally { camera.close() }
     }
     @Before fun guard() {
-        check(context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
+        val productionRun = context.packageName=="com.calvinmazhindu.skitcam" &&
+            InstrumentationRegistry.getArguments().getString("allowProduction")=="true"
+        check(productionRun || context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
     }
     @Test fun systemPickerCreatesVerifiedPortableProjectAndCameraStillRecords() {
@@ -111,7 +179,10 @@ class ProjectDeviceTest {
                 await("system save picker") { inst.uiAutomation.rootInActiveWindow?.packageName?.toString() in setOf("com.google.android.documentsui","com.android.documentsui") }
                 shot("system-save-picker")
                 // Android DocumentsUI uses this resource ID on the Moto's local Downloads provider.
-                click("Show roots");click("Downloads")
+                click("Show roots")
+                // The drawer row exposes android:id/title but is not itself marked clickable.
+                // Target that root row explicitly instead of the non-clickable breadcrumb.
+                tap(pickerRoot("Downloads"))
                 click("SAVE")
                 val id=ProjectJobs.latest(context)!!
                 await("project terminal",180) { ProjectJobs.state(ProjectJobs.read(context,id)) in setOf(ProjectState.Completed,ProjectState.Failed,ProjectState.Interrupted) }
@@ -146,7 +217,11 @@ class ProjectDeviceTest {
             val camera=ActivityScenario.launch(MainActivity::class.java)
             try {
                 lateinit var a: MainActivity;camera.onActivity { a=it }
-                await("camera after project") { a.recordingModel.cameraReady && a.orientation.pose==0 }
+                // The app intentionally remembers the last mode. This acceptance test needs
+                // the video camera regardless of whether the user last used Photo or Video.
+                await("recovery after project") { a.recordingModel.recovered.value && a.cameraModel.streaming }
+                inst.runOnMainSync { a.cameraModel.select(com.calvinmazhindu.skitcam.camera.CameraMode.SkitVideo,CameraLens.Rear,true) }
+                awaitCamera("camera after project",activity={a}) { a.recordingModel.cameraReady && a.orientation.pose==0 }
                 inst.runOnMainSync { a.recordingModel.start(0) }
                 await("new real recording after project") { a.recordingModel.snapshots.value.state==RecordingState.Recording && a.recordingModel.snapshots.value.activeDurationMs>=1500 }
                 a.recordingModel.stop()

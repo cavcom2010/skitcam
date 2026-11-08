@@ -2,6 +2,7 @@ package com.calvinmazhindu.skitcam.m12a
 
 import android.Manifest
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Build
 import android.os.SystemClock
 import android.view.Surface
@@ -11,8 +12,11 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.calvinmazhindu.skitcam.MainActivity
+import com.calvinmazhindu.skitcam.camera.CameraMode
+import com.calvinmazhindu.skitcam.export.ExportJournal
 import com.calvinmazhindu.skitcam.export.ExportTestSupport
 import com.calvinmazhindu.skitcam.playback.SkitPlaybackController
+import com.calvinmazhindu.skitcam.recording.CameraLens
 import com.calvinmazhindu.skitcam.recording.RecordingState
 import com.calvinmazhindu.skitcam.recording.SessionFileStore
 import com.calvinmazhindu.skitcam.recording.Session
@@ -20,6 +24,8 @@ import com.calvinmazhindu.skitcam.trim.TrimRange
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
 import com.calvinmazhindu.skitcam.review.SegmentReviewController
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Assume
@@ -61,6 +67,10 @@ class M12ADeviceTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it; model = it.recordingModel; review = it.reviewController }
         ExportTestSupport.beforeCamera()
+        await("recovery and preview stream") { model.recovered.value && activity.cameraModel.streaming }
+        if (activity.cameraModel.choice.mode != CameraMode.SkitVideo || activity.cameraModel.choice.lens != CameraLens.Rear) {
+            main { activity.cameraModel.select(CameraMode.SkitVideo, CameraLens.Rear, true) }
+        }
         await("camera ready") { model.cameraReady }
         Assume.assumeTrue("Preserve an existing open session",
             model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
@@ -123,6 +133,116 @@ class M12ADeviceTest {
         file.parentFile!!.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
+    }
+    private fun sha(file: File): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(file.readBytes()).joinToString("") { "%02x".format(it) }
+    private fun headerNode(label: String, prefix: Boolean = false): Rect {
+        val node = node {
+            val description = it.contentDescription?.toString()
+            if (prefix) description?.startsWith(label) == true else description == label
+        } ?: error("Missing header control: $label")
+        return Rect().also(node::getBoundsInScreen)
+    }
+    private fun headerSample(state: RecordingState) = JSONObject()
+        .put("state", state.name)
+        .put("settings", headerNode("Settings").toShortString())
+        .put("audio", headerNode("Audio input details.", prefix = true).toShortString())
+        .put("quick", headerNode("Quick settings").toShortString())
+    private fun assertSameHeader(idle: JSONObject, sample: JSONObject) {
+        for (key in listOf("settings", "audio", "quick"))
+            assertEquals("$key moved from idle to ${sample.getString("state")}: $idle vs $sample",
+                idle.getString(key), sample.getString(key))
+    }
+
+    @Test fun g_fiveSegmentUiLoopStopsAtSuffixAndReleasesForResume() {
+        record(5)
+        val session = model.snapshots.value.session!!
+        val segment3 = session.segments[2]
+        val sourceHashes = session.segments.associate { it.id to sha(File(it.path)) }
+        description("More actions for segment 3")
+        text("Play from here")
+        await("anchored five-clip plan") {
+            main { activity.playback.plan?.clips?.map { it.order } == listOf(3, 4, 5) && activity.playback.loop }
+        }
+        await("playback starts") { main { activity.playback.player?.isPlaying == true } }
+        val startedAt = SystemClock.elapsedRealtime()
+        val transitions = mutableListOf<Pair<Long, Int>>()
+        var last = -1
+        val deadline = System.nanoTime() + 20_000_000_000L
+        while (System.nanoTime() < deadline && transitions.size < 4) {
+            val index = main { activity.playback.currentIndex }
+            if (index != last) {
+                transitions += (SystemClock.elapsedRealtime() - startedAt) to index
+                last = index
+            }
+            if (main { activity.playback.finished }) break
+            Thread.sleep(50)
+        }
+        assertEquals("loop transitions", listOf(0, 1, 2, 0), transitions.map { it.second })
+        assertEquals("anchor remains segment 3", segment3.id, main { activity.playback.currentSegmentId })
+        assertFalse(main { activity.playback.finished })
+        assertTrue(main { activity.playback.plan!!.clips.none { it.order in listOf(1, 2) } })
+        screenshot("five-clip-loop-wrap")
+        click { it.text?.toString()?.startsWith("Loop from clip") == true }
+        await("loop off") { !main { activity.playback.loop } }
+        await("playback stops after segment 5", 20_000L) { main { activity.playback.finished } }
+        assertEquals(listOf(3, 4, 5), main { activity.playback.plan!!.clips.map { it.order } })
+        assertEquals(2, main { activity.playback.currentIndex })
+        description("Close playback")
+        await("playback closed") { main { activity.playback.player == null && activity.playback.plan == null } }
+        click { it.contentDescription?.toString() == "Resume recording" || it.text?.toString() == "RESUME" }
+        state(RecordingState.Recording)
+        assertNull(main { activity.playback.player })
+        assertNull(main { activity.playback.plan })
+        await("resumed samples") { model.snapshots.value.activeDurationMs >= 1200 }
+        model.pause(); state(RecordingState.Paused)
+        model.stop(); state(RecordingState.Completed)
+        val completed = model.snapshots.value.session!!
+        assertEquals(6, completed.segments.size)
+        completed.segments.take(5).forEach { assertEquals(sourceHashes.getValue(it.id), sha(File(it.path))) }
+        await("final export", 180_000L) {
+            ExportJournal.status.value?.let { it.sessionId == completed.id && it.state == com.calvinmazhindu.skitcam.export.ExportState.Completed } == true
+        }
+    }
+
+    @Test fun h_idleToStartHeaderBoundsRemainStable() {
+        await("stable pose") { main { activity.orientation.pose == 0 } }
+        assertTrue(model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
+        val idleState = model.snapshots.value.state
+        val idle = headerSample(idleState)
+        val observed = linkedMapOf(idleState to idle)
+        val startedAt = SystemClock.elapsedRealtime()
+        // Use the same recording command the START control invokes. A UI-automation click
+        // can return after CameraX has already advanced past the transient STARTING state.
+        model.start(0)
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val state = model.snapshots.value.state
+            if (state in setOf(RecordingState.Starting, RecordingState.Recording) && state !in observed) {
+                runCatching { observed[state] = headerSample(state) }
+            }
+            if (state == RecordingState.Recording && observed.containsKey(RecordingState.Starting)) break
+            Thread.sleep(5)
+        }
+        owned = model.snapshots.value.session!!.id
+        state(RecordingState.Recording)
+        Thread.sleep(500)
+        observed[RecordingState.Recording] = headerSample(RecordingState.Recording)
+        click { it.contentDescription?.toString() == "Pause recording" }
+        state(RecordingState.Paused)
+        Thread.sleep(300)
+        observed[RecordingState.Paused] = headerSample(RecordingState.Paused)
+        assertTrue("STARTING/ RECORDING/ PAUSED observed: ${observed.keys}",
+            observed.keys.containsAll(setOf(RecordingState.Starting, RecordingState.Recording, RecordingState.Paused)))
+        for ((state, sample) in observed) assertSameHeader(idle, sample.put("state", state.name))
+        val report = JSONObject().put("elapsedStartMs", SystemClock.elapsedRealtime() - startedAt)
+            .put("samples", JSONArray(observed.values.toList()))
+        File(context.filesDir, "validation-m12a").mkdirs()
+        File(context.filesDir, "validation-m12a/header-idle-to-start.json").writeText(report.toString(2))
+        screenshot("header-idle-to-start")
+        model.stop(); state(RecordingState.Completed)
+        val completed = model.snapshots.value.session!!
+        assertTrue(completed.segments.isNotEmpty())
     }
 
     @Test fun a_contextReviewAndDirectShelfActions() {

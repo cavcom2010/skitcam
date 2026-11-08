@@ -2,7 +2,28 @@
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
 
-Version **0.12.0** adds direct segment shelf Discard/Restore actions with Undo,
+Version **0.13.0** completes Milestone 12B with faster verified video saving.
+Eligible untrimmed clips now use gated direct copy or video passthrough instead
+of re-encoding the video, while the existing Media3 renderer remains the safe
+fallback. Export retry and Gallery publication handling are improved, the camera
+header stays fixed when recording starts, and landscape segment review places
+video on the left with metadata and actions on the right. Milestone 12A shelf
+Discard/Restore, Undo, anchored skit playback with Loop, and recovery hardening
+remain supported. See
+[VALIDATION_RELEASE_0_13_0.md](VALIDATION_RELEASE_0_13_0.md) for release
+verification, upgrade preservation and device results.
+
+**Export size tradeoff:** preserving eligible source video keeps the original
+camera bitrate, so fast-path outputs can be substantially larger than the prior
+re-encode. This is a deliberate quality-preserving tradeoff, not hidden
+compression. Direct copy is intentionally narrow; real camera recordings
+normally use video passthrough with audio re-rendering. Saved playback-order
+(arrangement) changes do not by themselves force re-encoding; compatible
+untrimmed clips may remain eligible. Trimmed clips, unsafe video
+presentation-timestamp/keyframe ordering (including B-frames), incompatible
+codecs or metadata, and legacy jobs use the renderer.
+
+Version **0.12.0** added direct segment shelf Discard/Restore actions with Undo,
 anchored continuous skit playback with Loop, and recovery hardening. See
 [VALIDATION_M12A.md](VALIDATION_M12A.md) for the M12A device validation and the
 0.12.0 local release verification.
@@ -589,10 +610,16 @@ current results. Earlier validation reports preserve the Milestone 1 and 2 resul
 
 ## Automatic MP4 finishing
 
-New profiled sessions re-encode to SDR H.264/AVC at their saved source dimensions
-and preserve source presentation cadence, with AAC-LC 48 kHz stereo audio. Capture
-and export bitrates are automatic; measured source bitrate is recorded separately.
-Legacy sessions/jobs retain the previous at-most-720p, 30 fps cap and 4 Mbps export
+Profiled sessions target SDR H.264/AVC at their saved source dimensions with
+AAC-LC 48 kHz stereo audio. Eligible untrimmed clips may bypass video re-encoding
+through verified direct copy or video passthrough. Saved segment playback-order
+changes do not by themselves require rendering. Trimmed clips, unsafe video
+presentation-timestamp/keyframe ordering (including B-frames), incompatible
+codecs or metadata, and legacy jobs use the existing Media3 renderer. Source
+presentation cadence, the 100 ms audio/video timing gate and full output
+verification are retained on every path. Capture and export
+bitrates are automatic; measured source bitrate is recorded separately. Legacy
+sessions/jobs retain the previous at-most-720p, 30 fps cap and 4 Mbps export
 policy. Smaller sources are not enlarged. Incompatible aspect ratios, HDR, missing tracks or broken retained
 sources fail explicitly. There is no silent skipping, cropping, stretching or
 source cleanup. Arbitrary frame rates and encoder properties require device
