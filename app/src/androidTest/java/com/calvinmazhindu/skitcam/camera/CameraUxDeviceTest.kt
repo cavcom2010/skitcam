@@ -238,7 +238,7 @@ class CameraUxDeviceTest {
         assertTrue("Thumbnail must stay above dock",thumb.bottom<=resume.top)
         shot("immersive-paused-portrait")
         click("Review segment 1,",prefix=true)
-        await("review visible") { find("Trim")!=null && find("Discard")!=null && find("Close")!=null && find("Keep")==null }
+        await("review visible") { find("Trim timeline")!=null && find("Discard")!=null && find("Close")!=null && find("Keep")==null }
         await("review player ready: ${activity.reviewController.error}") {
             var ready=false
             inst.runOnMainSync { ready=activity.reviewController.player?.playbackState==androidx.media3.common.Player.STATE_READY }
@@ -247,7 +247,7 @@ class CameraUxDeviceTest {
         assertNull("Capture dock hidden during review",find("Resume recording"))
         assertNull("Capture dock hidden during review",find("Stop recording"))
         assertNull("Camera header hidden during review",find("Settings"))
-        val reviewRects=listOf("Trim","Discard","Close").map { it to target(it) }
+        val reviewRects=listOf("Discard","Close").map { it to target(it) }
         for((first,rect) in reviewRects) for((second,other) in reviewRects) if(first<second)
             assertFalse("$first collides with $second",android.graphics.Rect.intersects(rect,other))
         await("review shelf preserved") { find("Review segment 1,",prefix=true)!=null }

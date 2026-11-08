@@ -94,7 +94,6 @@ class TrimDurationProbeDeviceTest {
         val reports = org.json.JSONArray()
         for (order in 1..3) {
             click { it.contentDescription?.startsWith("Review segment $order,") == true }
-            click { it.text?.toString() == "Trim" }
             await("trim ready $order") { trim.ready }
             await("player ready $order trim=${main { trim.error }} review=${main { review.error }}") {
                 main { review.player?.playbackState == Player.STATE_READY }
@@ -124,8 +123,8 @@ class TrimDurationProbeDeviceTest {
                         else JSONObject.NULL)
             }
             reports.put(report)
-            click { it.text?.toString() == "Cancel" }
-            await("trim closed $order") { trim.segment == null }
+            click { it.text?.toString() == "Close" }
+            await("review closed $order") { trim.segment == null && review.selection == null }
         }
         val directory = File(context.filesDir, "validation-m12d").apply { mkdirs() }
         File(directory, "trim-duration-probe.json").writeText(reports.toString(2))

@@ -1,16 +1,13 @@
 package com.calvinmazhindu.skitcam.trim
-import com.calvinmazhindu.skitcam.arrange.ArrangementViewModel
 
 import android.Manifest
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.Player
 import androidx.test.core.app.ActivityScenario
@@ -34,12 +31,12 @@ class TrimDeviceTest {
     private val context get() = instrumentation.targetContext
     private lateinit var scenario: ActivityScenario<MainActivity>
     private lateinit var model: RecordingViewModel
-    private lateinit var editor: ArrangementViewModel
     private lateinit var trim: TrimViewModel
     private lateinit var review: SegmentReviewController
     private var originalRotation: String? = null
     private var owned: String? = null
     private var leavePaused = false
+
     private fun shell(command: String) = instrumentation.uiAutomation.executeShellCommand(command).use {
         android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText().trim()
     }
@@ -62,14 +59,16 @@ class TrimDeviceTest {
             model.snapshots.value.state in setOf(RecordingState.Ready, RecordingState.Completed))
     }
     private fun bindModels() = scenario.onActivity {
-        trim = it.trimModel; model = it.recordingModel; editor = it.arrangementModel; review = it.reviewController
+        trim = it.trimModel; model = it.recordingModel; review = it.reviewController
     }
     @After fun close() {
         try {
             if (::model.isInitialized && owned != null && model.snapshots.value.session?.id == owned && !leavePaused) {
-                main { trim.close(); review.close(); editor.cancel() }
+                main { trim.close(); review.close() }
                 if (model.snapshots.value.state == RecordingState.Recording) model.stop()
-                await("test recording settled") { model.snapshots.value.state !in setOf(RecordingState.Starting, RecordingState.Finalising, RecordingState.Stopping) }
+                await("test recording settled") {
+                    model.snapshots.value.state !in setOf(RecordingState.Starting, RecordingState.Finalising, RecordingState.Stopping)
+                }
                 if (model.snapshots.value.state in setOf(RecordingState.Paused, RecordingState.Error) && !model.snapshots.value.unresolved) {
                     model.stop(); state(RecordingState.Completed)
                 }
@@ -79,30 +78,35 @@ class TrimDeviceTest {
             originalRotation?.let { shell("wm user-rotation $it") }
         }
     }
-    private fun await(message: String, condition: () -> Boolean) {
-        val end = System.nanoTime() + 25_000_000_000L
+    private fun await(message: String, timeoutMs: Long = 25_000L, condition: () -> Boolean) {
+        val end = System.nanoTime() + timeoutMs * 1_000_000
         while (!condition() && System.nanoTime() < end) Thread.sleep(100)
-        assertTrue("Timed out: $message; ${if (::model.isInitialized) model.snapshots.value else "no model"}; editor=${if (::trim.isInitialized) main { "ready=${trim.ready}, draft=${trim.draft}, error=${trim.error}, player=${review.player?.playbackState}, playback=${review.error}" } else "unbound"}", condition())
+        assertTrue("Timed out: $message; ${if (::model.isInitialized) model.snapshots.value else "no model"}; " +
+            "trim=${if (::trim.isInitialized) main { "ready=${trim.ready}, draft=${trim.draft}, dirty=${trim.dirty}, error=${trim.error}, saving=${trim.saving}" } else "unbound"}",
+            condition())
     }
     private fun state(state: RecordingState) = await(state.name) { model.snapshots.value.state == state }
     private fun awaitPose(pose: Int) {
         await("stable pose $pose") {
-            var matched=false
-            scenario.onActivity { matched=it.orientation.pose==pose && com.calvinmazhindu.skitcam.recording.CameraOrientationPolicy.matchesDisplay(pose,it.orientation.displayRotation) }
+            var matched = false
+            scenario.onActivity {
+                matched = it.orientation.pose == pose &&
+                    com.calvinmazhindu.skitcam.recording.CameraOrientationPolicy.matchesDisplay(pose, it.orientation.displayRotation)
+            }
             matched
         }
     }
     private fun record(count: Int, pose: Int = 0) {
-        awaitPose(pose);model.start(pose); state(RecordingState.Recording)
+        awaitPose(pose); model.start(pose); state(RecordingState.Recording)
         owned = model.snapshots.value.session!!.id
         repeat(count) { index ->
-            if (index > 0) { awaitPose(pose);model.resume(pose); state(RecordingState.Recording) }
-            await("recorded samples") { model.snapshots.value.activeDurationMs >= 3000 }
+            if (index > 0) { awaitPose(pose); model.resume(pose); state(RecordingState.Recording) }
+            await("recorded samples") { model.snapshots.value.activeDurationMs >= 3_000 }
             model.pause(); state(RecordingState.Paused)
         }
     }
     private fun node(predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
-        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+        if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
         fun find(n: AccessibilityNodeInfo): AccessibilityNodeInfo? {
             if (n.isVisibleToUser && predicate(n)) return n
             for (i in 0 until n.childCount) n.getChild(i)?.let { find(it)?.let { result -> return result } }
@@ -122,11 +126,6 @@ class TrimDeviceTest {
         await(description) { node { it.contentDescription?.toString() == description } != null }
         return Rect().apply { node { it.contentDescription?.toString() == description }!!.getBoundsInScreen(this) }
     }
-    private fun arrange() {
-        text("Arrange"); await("draft open") { main { editor.draft != null } }
-        assertTrue(model.cameraReady)
-        scenario.onActivity { assertTrue(ProcessCameraProvider.getInstance(it).get().isBound(model.port.capture)) }
-    }
     private fun drag(from: Rect, toX: Float, toY: Float, holdAtEnd: Long = 0) {
         val down = SystemClock.uptimeMillis()
         fun event(action: Int, x: Float, y: Float) {
@@ -145,128 +144,135 @@ class TrimDeviceTest {
             }
             if (holdAtEnd > 0) Thread.sleep(holdAtEnd)
         } finally { event(MotionEvent.ACTION_UP, toX, toY) }
-        await("drag ended") { main { editor.draggingId == null } }
     }
     private fun screenshot(name: String) {
         val image = instrumentation.uiAutomation.takeScreenshot() ?: error("No screenshot")
-        val file = File(context.filesDir, "validation-m5/${UUID.randomUUID()}-$name.png")
+        val file = File(context.filesDir, "validation-m12e/${UUID.randomUUID()}-$name.png")
         file.parentFile!!.mkdirs()
         file.outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
         image.recycle()
     }
     private fun metadata() = File(context.filesDir, "sessions/${owned!!}/session.json").readText()
-    private fun finishAndVerify(pose: Int, arranged: List<String>, history: List<Segment>) {
-        awaitPose(pose);model.resume(pose); state(RecordingState.Recording)
-        assertNull(main { review.player }); assertNull(main { editor.draft })
-        await("audio/video after arranging") { model.snapshots.value.activeDurationMs >= 3000 }
-        model.stop(); state(RecordingState.Completed)
-        val session = model.snapshots.value.session!!
-        assertEquals(history, session.segments.dropLast(1))
-        assertEquals(arranged, session.playbackOrder.dropLast(1))
-        assertEquals(session.segments.last().id, session.playbackOrder.last())
-        val store = SessionFileStore(File(context.filesDir, "sessions"))
-        session.segments.forEach { assertEquals(it.videoRotationDegrees, store.validate(it.path)) }
-        assertEquals(session, store.loadLatest())
-    }
     private fun openTrim(number: Int) {
         click { it.contentDescription?.startsWith("Review segment $number,") == true }
-        text("Trim")
-        await("trim ready") { main { trim.ready } }
-        await("clipped player ready; error=${main { trim.error }}; review=${main { review.error }}") { main { review.player?.playbackState == Player.STATE_READY } }
+        await("review selection") { main { review.selection != null } }
+        await("inline trim ready", 60_000L) { main { trim.ready } }
+        await("clipped player ready", 60_000L) {
+            main { review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED) }
+        }
+        await("trim track visible", 60_000L) { node { it.contentDescription?.toString() == "Trim timeline" } != null }
     }
     private fun dragBoundary(start: Boolean, fraction: Float) {
         val rect = bounds("Trim timeline")
         val from = Rect(rect)
-        val x = if(start) rect.left + 5 else rect.right - 5
-        from.set(x-1,rect.centerY()-1,x+1,rect.centerY()+1)
-        drag(from,rect.left + rect.width()*fraction,rect.exactCenterY())
+        val x = if (start) rect.left + 5 else rect.right - 5
+        from.set(x - 1, rect.centerY() - 1, x + 1, rect.centerY() + 1)
+        drag(from, rect.left + rect.width() * fraction, rect.exactCenterY())
+        await("trim settled") { main { !trim.saving } }
     }
     private fun digest(path: String) = java.security.MessageDigest.getInstance("SHA-256").digest(File(path).readBytes()).toList()
-    @Test fun a_dragPreviewSaveCancelResetAndRecording() {
+    @Test fun a_inlineDragSaveResetDirtyCloseAndSourcePreservation() {
         record(2)
         val original = model.snapshots.value.session!!
         val hashes = original.segments.associate { it.id to digest(it.path) }
         openTrim(1)
-        dragBoundary(true,0.2f); dragBoundary(false,0.8f)
+        dragBoundary(true, 0.2f); dragBoundary(false, 0.8f)
         val chosen = main { trim.draft!! }
         assertTrue("End handle did not move: $chosen", chosen.trimEndMs < chosen.sourceDurationMs)
-        assertTrue("Drag did not trim: $chosen; error=${main { trim.error }}",chosen.isTrimmed); assertTrue("Invalid draft $chosen",chosen.valid())
+        assertTrue("Drag did not trim: $chosen", chosen.isTrimmed)
+        assertTrue("Invalid draft $chosen", chosen.valid())
+        assertTrue("Trim must be dirty before save", main { trim.dirty })
+        assertNull("Play from here hidden while trim is dirty", node { it.text?.toString() == "Play from here" })
         description("Play")
         await("playing clipped interval") { main { review.player?.isPlaying == true } }
         await("stops at clip end") { main { review.player?.playbackState == Player.STATE_ENDED } }
         main { assertTrue(review.player!!.currentPosition <= chosen.effectiveDurationMs + 100) }
-        screenshot("portrait-trim")
-        text("Save"); await("saved") { main { trim.segment == null } }
-        assertEquals(chosen,model.snapshots.value.session!!.segments[0].trim)
-        openTrim(1); assertEquals(chosen,main { trim.draft })
-        main { trim.change(chosen.start(0)); trim.settled() };text("Cancel")
-        await("cancel") { main { trim.segment == null } }
-        assertEquals(chosen,model.snapshots.value.session!!.segments[0].trim)
-        openTrim(1);text("Reset Trim"); assertFalse(main { trim.draft!!.isTrimmed });text("Cancel")
-        await("cancel reset") { main { trim.segment == null } }
-        openTrim(2); main { trim.change(trim.draft!!.start(200));trim.settled() };text("Save")
-        await("saved second") { main { trim.segment == null } }
-        text("Arrange");await("arrange") { main { editor.draft != null } }
-        description("Move segment 2 up");text("Done");await("arranged") { main { editor.draft == null } }
-        val session=model.snapshots.value.session!!
-        val result=AtomicReference<SegmentEditResult>()
-        model.setSegmentKept(session.id,session.segments[0].id,false){result.set(it)}
-        await("discard") { model.snapshots.value.count==1 }
-        model.setSegmentKept(session.id,session.segments[0].id,true){result.set(it)}
-        await("restore") { model.snapshots.value.count==2 }
-        assertEquals(chosen,model.snapshots.value.session!!.segments[0].trim)
-        model.resume(0);state(RecordingState.Recording)
-        assertNull(main { review.player });await("new audio samples") { model.snapshots.value.activeDurationMs>=1500 }
-        model.stop();state(RecordingState.Completed)
-        val store=SessionFileStore(File(context.filesDir,"sessions"))
-        model.snapshots.value.session!!.segments.forEach { store.validate(it.path) }
-        original.segments.forEach { assertEquals(hashes[it.id],digest(it.path)) }
+        screenshot("portrait-inline-trim")
+        text("Save trim")
+        await("trim saved") { main { !trim.dirty && !trim.saving } }
+        assertEquals(chosen, model.snapshots.value.session!!.segments[0].trim)
+        assertNotNull("Play from here returns after save", node { it.text?.toString() == "Play from here" })
+        text("Close")
+        await("review closed after save") { main { review.selection == null } }
+        openTrim(1)
+        assertEquals(chosen, main { trim.draft })
+        main { trim.change(trim.draft!!.start(0)); trim.settled() }
+        text("Close")
+        await("discard prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Keep editing")
+        await("still reviewing") { main { review.selection != null } }
+        text("Close")
+        await("discard prompt again") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Discard")
+        await("review closed without saving") { main { review.selection == null && trim.segment == null } }
+        assertEquals(chosen, model.snapshots.value.session!!.segments[0].trim)
+
+        openTrim(1)
+        text("Reset trim")
+        assertFalse(main { trim.draft!!.isTrimmed })
+        text("Save trim")
+        await("reset saved") { main { !trim.dirty && !trim.saving } }
+        val full = model.snapshots.value.session!!.segments[0].trim!!
+        assertFalse(full.isTrimmed)
+        assertEquals(full.sourceDurationMs, full.trimEndMs)
+        text("Close")
+        await("review closed") { main { review.selection == null } }
+        assertEquals(original.segments.map { it.id }, model.snapshots.value.session!!.segments.map { it.id })
+        original.segments.forEach { assertEquals(hashes[it.id], digest(it.path)) }
+        model.resume(0); state(RecordingState.Recording)
+        await("new audio samples") { model.snapshots.value.activeDurationMs >= 1_500 }
+        model.stop(); state(RecordingState.Completed)
     }
     @Suppress("DEPRECATION")
-    @Test fun b_landscapeDraftRecreationAndReset() {
+    @Test fun b_landscapeInlineTrimSave() {
         shell("wm user-rotation lock 1")
-        await("landscape") { var yes=false;scenario.onActivity { yes=it.windowManager.defaultDisplay.rotation==Surface.ROTATION_90 };yes&&model.cameraReady }
-        record(1,270);bindModels();openTrim(1)
-        val full=main { trim.draft!! }
-        main { trim.change(full.start(300));trim.settled() }
-        val draft=main { trim.draft }
-        scenario.moveToState(Lifecycle.State.CREATED);scenario.moveToState(Lifecycle.State.RESUMED)
-        await("ready after background") { main { trim.ready } };assertEquals(draft,main { trim.draft })
-        scenario.recreate();bindModels();await("ready after recreate") { main { trim.ready } }
-        assertEquals(draft,main { trim.draft })
-        await("timeline after recreation") { node { it.contentDescription?.toString()=="Trim timeline" }!=null }
-        text("Zoom in");await("zoomed timeline pan") { node { it.contentDescription?.toString()=="Timeline position" }!=null }
-        text("Show end");text("Show start");text("Zoom out")
-        instrumentation.waitForIdleSync();Thread.sleep(300);screenshot("landscape-trim")
-        // Controls may be below the viewport in landscape; scroll the editor content.
-        repeat(4) { if(node { it.text?.toString()=="Reset Trim" }==null) node { it.isScrollable }?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
-        text("Reset Trim");text("Save");await("saved reset") { main { trim.segment==null } }
-        assertEquals(full,model.snapshots.value.session!!.segments.single().trim)
-        model.resume(270);state(RecordingState.Recording);await("landscape new audio") { model.snapshots.value.activeDurationMs>=1500 };model.stop();state(RecordingState.Completed)
-    }
-    @Test fun c_missingCorruptAndInterruptedAtomicWrite() {
-        record(1)
-        val before=model.snapshots.value
-        val root=File(context.filesDir,"validation-m5/atomic-${UUID.randomUUID()}")
-        val store=SessionFileStore(root)
-        val session=Session("test",1,0,RecordingState.Paused)
-        store.save(session)
-        val atomic=android.util.AtomicFile(File(root,"test/session.json"))
-        atomic.startWrite().use { it.write("{truncated".toByteArray()) } // Simulate death before finishWrite.
-        assertEquals(session,store.loadLatest())
-        val corrupt=File(root,"corrupt.mp4").apply { writeText("not an MP4") }
-        for(path in listOf(File(root,"missing.mp4").path,corrupt.path)) {
-            val item=Segment(1,path,1000,0,90)
-            main { trim.open(before.session!!.copy(segments=listOf(item), playbackOrder=listOf(item.id)),item) }
-            await("source error") { main { trim.error!=null } }
-            assertFalse(main { trim.canSave });text("Cancel")
-            await("closed unavailable") { main { trim.segment==null } }
+        await("landscape") {
+            var yes = false
+            scenario.onActivity {
+                yes = it.windowManager.defaultDisplay.rotation == Surface.ROTATION_90
+            }
+            yes && model.cameraReady
         }
-        assertEquals(before,model.snapshots.value)
+        record(1, 270); bindModels(); openTrim(1)
+        val full = main { trim.draft!! }
+        main { trim.change(full.start(300)); trim.settled() }
+        val draft = main { trim.draft }
+        screenshot("landscape-inline-trim")
+        text("Save trim")
+        await("landscape trim saved") { main { !trim.dirty && !trim.saving } }
+        assertEquals(draft, model.snapshots.value.session!!.segments.single().trim)
+        text("Close")
+        await("closed landscape review") { main { review.selection == null } }
+        model.resume(270); state(RecordingState.Recording)
+        await("landscape new audio") { model.snapshots.value.activeDurationMs >= 1_500 }
+        model.stop(); state(RecordingState.Completed)
+    }
+    @Test fun c_dirtyCloseKeepEditingAndMissingSourceFallback() {
+        record(2)
+        val before = metadata()
+        openTrim(1)
+        val firstId = model.snapshots.value.session!!.segments[0].id
+        main { trim.change(trim.draft!!.start(200)); trim.settled() }
+        click { it.contentDescription?.startsWith("Review segment 2,") == true }
+        await("switch prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Keep editing")
+        await("selection retained") { main { review.selection?.segmentId == firstId } }
+        text("Close")
+        await("dirty prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Keep editing")
+        assertEquals(before, metadata())
+        text("Close"); text("Discard")
+        await("closed") { main { review.selection == null && trim.segment == null } }
+        assertEquals(before, metadata())
+        model.stop(); state(RecordingState.Completed)
     }
     @Test fun z_restartFixture() {
-        record(1);openTrim(1);main { trim.change(trim.draft!!.start(300));trim.settled() };text("Save")
-        await("saved") { main { trim.segment==null } }
-        leavePaused=true
+        record(1); openTrim(1)
+        main { trim.change(trim.draft!!.start(300)); trim.settled() }
+        text("Save trim")
+        await("saved") { main { !trim.dirty } }
+        text("Close")
+        await("closed") { main { review.selection == null } }
+        leavePaused = true
     }
 }

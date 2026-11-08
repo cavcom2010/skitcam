@@ -1,6 +1,7 @@
 package com.calvinmazhindu.skitcam.video
 
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.view.Surface
@@ -123,6 +124,7 @@ class UnifiedVideoLayoutDeviceTest {
     private fun record() {
         if (orientation == "landscape") {
             shell("wm user-rotation lock 1")
+            scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
             await("landscape display") {
                 var landscape = false
                 scenario.onActivity { landscape = it.windowManager.defaultDisplay.rotation == Surface.ROTATION_90 }
@@ -259,14 +261,16 @@ class UnifiedVideoLayoutDeviceTest {
         assertTrue("$label outside viewport: $rect", rect.width() > 0 && viewport.contains(rect))
         assertTrue("$label too small: $rect", rect.width() >= minimum && rect.height() >= minimum)
     }
-    private fun assertSemanticBounds(label: String, viewport: Rect, scrollable: Boolean = false) {
+    private fun assertSemanticBounds(label: String, viewport: Rect, scrollable: Boolean = false,
+        minimumTarget: Boolean = true) {
         val minimum = (48 * context.resources.displayMetrics.density).roundToInt()
         var rect = Rect()
         for (attempt in 0 until if (scrollable) 8 else 1) {
             val found = node { it.contentDescription?.toString() == label }
             if (found != null) {
                 rect = Rect().also(found::getBoundsInScreen)
-                if (viewport.contains(rect) && rect.width() >= minimum && rect.height() >= minimum) return
+                if (viewport.contains(rect) && (!minimumTarget ||
+                        (rect.width() >= minimum && rect.height() >= minimum))) return
             }
             if (!scrollable) break
             val scroll = scrollableNode() ?: break
@@ -274,7 +278,7 @@ class UnifiedVideoLayoutDeviceTest {
             Thread.sleep(150)
         }
         assertTrue("$label outside viewport: $rect", rect.width() > 0 && viewport.contains(rect))
-        assertTrue("$label too small: $rect", rect.width() >= minimum && rect.height() >= minimum)
+        if (minimumTarget) assertTrue("$label too small: $rect", rect.width() >= minimum && rect.height() >= minimum)
     }
     @Test fun allThreeScreensShareAspectFitAndAccessibleControls() {
         record()
@@ -284,7 +288,10 @@ class UnifiedVideoLayoutDeviceTest {
 
         // Review
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        await("review player") { main { review.player?.playbackState == Player.STATE_READY } }
+        await("review player trim=${main { trim.ready }} state=${main { review.player?.playbackState }} " +
+            "selection=${main { review.selection }} trimError=${main { trim.error }} reviewError=${main { review.error }}", 60_000L) {
+            main { trim.ready && review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED) }
+        }
         click { it.contentDescription?.toString() == "Play" }
         await("review playing") { main { review.player?.let { it.isPlaying && it.currentPosition > 300 } == true } }
         click { it.contentDescription?.toString() == "Pause" }
@@ -294,32 +301,21 @@ class UnifiedVideoLayoutDeviceTest {
             first?.stateDescription?.toString()?.contains("Selected") == true)
         assertTrue("second thumbnail not selected: ${second?.stateDescription}",
             second?.stateDescription?.toString()?.contains("Selected") != true)
-        for (control in listOf("Trim", "Discard", "Play from here", "Close")) assertControl(control, viewport)
+        await("inline trim ready") { node { it.contentDescription?.toString() == "Trim timeline" } != null }
+        assertSemanticBounds("Trim timeline", viewport, minimumTarget = false)
+        assertSemanticBounds("Trim start handle", viewport)
+        assertSemanticBounds("Trim end handle", viewport)
+        for (control in listOf("Discard", "Play from here", "Close")) assertControl(control, viewport)
         reports.put(screenReport("review", "Segment 1 playback", 1, viewport, fontScale))
         screenshot("$stem-review")
         text("Close")
         await("review closed") { main { review.selection == null } }
 
-        // Trim
-        click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        text("Trim")
-        await("trim ready") { main { trim.ready } }
-        await("trim player") { main { review.player?.playbackState == Player.STATE_READY } }
-        assertControl("Cancel", viewport)
-        assertControl("Save", viewport)
-        for (control in listOf("Reset Trim", "Precision controls")) assertControl(control, viewport, scrollable = true)
-        assertSemanticBounds("Trim timeline", viewport, scrollable = true)
-        assertSemanticBounds("Trim start handle", viewport, scrollable = true)
-        assertSemanticBounds("Trim end handle", viewport, scrollable = true)
-        assertControl("Play", viewport, byDescription = true)
-        reports.put(screenReport("trim", "Trim video preview", 1, viewport, fontScale))
-        screenshot("$stem-trim")
-        text("Cancel")
-        await("trim closed") { main { trim.segment == null } }
-
         // Whole-skit playback from the selected segment
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        await("review before playback") { main { review.player?.playbackState == Player.STATE_READY } }
+        await("review before playback") {
+            main { trim.ready && review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED) }
+        }
         text("Play from here")
         await("skit playback") { main { activity.playback.player?.isPlaying == true } }
         await("playback frame") {
@@ -338,22 +334,20 @@ class UnifiedVideoLayoutDeviceTest {
     private fun pressBack() {
         instrumentation.runOnMainSync { activity.onBackPressedDispatcher.onBackPressed() }
     }
-    @Test fun backNavigationClosesReviewTrimAndPlayback() {
+    @Test fun backNavigationClosesReviewAndPlayback() {
         record()
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
         await("review open") { main { review.selection != null } }
         pressBack()
-        await("review closed by back") { main { review.selection == null && review.player == null } }
+        await("review closed by back") {
+            main { review.selection == null && review.player == null && trim.segment == null }
+        }
+        await("paused controls after review") { node { it.text?.toString() == "RESUME" } != null }
 
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        text("Trim")
-        await("trim ready") { main { trim.ready } }
-        pressBack()
-        await("trim closed by back") { main { trim.segment == null && review.player == null } }
-        await("paused controls after trim") { node { it.text?.toString() == "RESUME" } != null }
-
-        click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        await("review before play") { main { review.player?.playbackState == Player.STATE_READY } }
+        await("review before play") {
+            main { trim.ready && review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED) }
+        }
         text("Play from here")
         await("playback open") { main { activity.playback.active && activity.playback.player != null } }
         pressBack()

@@ -31,8 +31,7 @@ fun rememberVideoPlaybackState(player: Player?): VideoPlaybackState {
         }
         while (isActive) {
             state = player.snapshot()
-            if (state.finished) break
-            delay(100)
+            delay(80)
         }
     }
     return state

@@ -34,6 +34,7 @@ class ReviewLayoutDeviceTest {
     private val label by lazy { arguments.getString("label") ?: "run" }
     private val baseline by lazy { arguments.getString("baseline") == "true" }
     private lateinit var scenario: ActivityScenario<MainActivity>
+    private lateinit var activity: MainActivity
     private lateinit var model: RecordingViewModel
     private lateinit var review: SegmentReviewController
     private var originalRotation: String? = null
@@ -52,7 +53,7 @@ class ReviewLayoutDeviceTest {
         shell("wm user-rotation lock 0")
         if (orientation == "landscape") shell("wm fixed-to-user-rotation enabled")
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        scenario.onActivity { model = it.recordingModel; review = it.reviewController }
+        scenario.onActivity { activity = it; model = it.recordingModel; review = it.reviewController }
         com.calvinmazhindu.skitcam.export.ExportTestSupport.beforeCamera()
         await("camera") { model.cameraReady }
         Assume.assumeTrue("Preserve any existing open session",
@@ -178,9 +179,36 @@ class ReviewLayoutDeviceTest {
             node { it.contentDescription?.startsWith("Review segment 1,") == true } != null
         }
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        await("review player ready") { main { review.player?.playbackState == Player.STATE_READY } }
+        await("review player ready", 60_000L) {
+            main {
+                activity.trimModel.ready &&
+                    review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED)
+            }
+        }
         click { it.contentDescription?.toString() == "Play" }
+        await("pause icon while playing") {
+            node { it.contentDescription?.toString() == "Pause" } != null
+        }
         await("decoded frame") { main { review.player?.let { it.isPlaying && it.videoSize.width > 0 && it.currentPosition > 400 } == true } }
+        fun timeText(): String? = node { it.text?.toString()?.contains(" / ") == true }?.text?.toString()
+        val timeBefore = timeText()
+        Thread.sleep(600)
+        val timeAfter = timeText()
+        assertNotEquals("Playback time must advance while playing", timeBefore, timeAfter)
+        click { it.contentDescription?.toString() == "Pause" }
+        await("play icon while paused") {
+            main { review.player?.isPlaying == false } && node { it.contentDescription?.toString() == "Play" } != null
+        }
+        val jump = node { it.contentDescription?.toString() == "Jump to segment start" }
+        assertNotNull("Missing jump-to-start", jump)
+        val jumpBounds = Rect().also(jump!!::getBoundsInScreen)
+        assertTrue("Jump-to-start target clipped: $jumpBounds",
+            jumpBounds.width() >= (48 * context.resources.displayMetrics.density).toInt() &&
+                jumpBounds.height() >= (48 * context.resources.displayMetrics.density).toInt())
+        click { it.contentDescription?.toString() == "Jump to segment start" }
+        await("jumped to segment start") { main { (review.player?.currentPosition ?: Long.MAX_VALUE) <= 100 } }
+        click { it.contentDescription?.toString() == "Play" }
+        await("decoded frame after jump") { main { review.player?.let { it.isPlaying && it.currentPosition > 300 } == true } }
         click { it.contentDescription?.toString() == "Pause" }
         await("paused with decoded video") { main { review.player?.isPlaying == false } }
         Thread.sleep(300)
@@ -208,8 +236,16 @@ class ReviewLayoutDeviceTest {
         assertTrue("Player must be inside the viewport: $player vs $viewport", viewport.contains(player))
         assertTrue("Rendered video must be inside the player: $rendered vs $player", player.contains(rendered))
 
-        val expectedLabels = listOf("Trim", "Discard", "Play from here", "Close")
+        await("inline trim ready") { node { it.contentDescription?.toString() == "Trim timeline" } != null }
         val controls = JSONObject()
+        for (track in listOf("Trim timeline", "Trim start handle", "Trim end handle")) {
+            val item = node { it.contentDescription?.toString() == track }
+            assertNotNull("Missing $track", item)
+            val rect = Rect().also(item!!::getBoundsInScreen)
+            assertTrue("$track outside viewport: $rect vs $viewport", viewport.contains(rect))
+            controls.put(track, JSONObject().put("bounds", rect.flattenToString()))
+        }
+        val expectedLabels = listOf("Discard", "Play from here", "Close")
         val rects = mutableMapOf<String, Rect>()
         for (control in expectedLabels) {
             var current = node { it.text?.toString() == control }

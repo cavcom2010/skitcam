@@ -72,7 +72,6 @@ import com.calvinmazhindu.skitcam.arrange.ArrangementScreen
 import androidx.compose.ui.semantics.clearAndSetSemantics
 
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
-import com.calvinmazhindu.skitcam.trim.TrimScreen
 
 import com.calvinmazhindu.skitcam.export.*
 
@@ -123,6 +122,7 @@ class MainActivity : ComponentActivity() {
         arrangementModel.cancelDrag()
         playback.close()
         reviewController.close()
+        trimModel.close()
         recordingModel.background()
         super.onPause()
     }
@@ -167,8 +167,8 @@ internal fun MainActivity.CameraScreen() {
     val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
     val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
-    val reviewing = review.selection != null && arrangement.draft == null && trimModel.segment == null && !finishing
-    val immersiveVideoUi = reviewing || playback.active || trimModel.segment != null
+    val reviewing = review.selection != null && arrangement.draft == null && !finishing
+    val immersiveVideoUi = reviewing || playback.active
     // This owner survives Photo/Video control changes and the finishing overlay.
     SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
     val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
@@ -264,8 +264,7 @@ internal fun MainActivity.CameraScreen() {
                 ExportJournal.busy,photoModel.busy || recordingModel.commandPending.value || camera.video.pending) || camera.switching) return
         startActivity(Intent(this@CameraScreen,com.calvinmazhindu.skitcam.gallery.SavedMediaActivity::class.java))
     }
-    val trimming = trimModel.segment != null
-    val arranging = arrangement.draft != null || trimming || finishing
+    val arranging = arrangement.draft != null || finishing
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
@@ -390,8 +389,8 @@ internal fun MainActivity.CameraScreen() {
             if (playback.active) {
                 SkitPlaybackScreen(playback, pausedModifier) { playback.close() }
             } else if (!arranging) {
-                PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
-                    onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = pausedModifier,
+                PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails, trimModel,
+                    modifier = pausedModifier,
                     onPlayFromBeginning = { snapshot.session?.let { review.close(); playback.play(it) } },
                     onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } },
                     immersiveReview = reviewing)
@@ -460,7 +459,6 @@ internal fun MainActivity.CameraScreen() {
         if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
-        if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
         if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
         SnackbarHost(snackbars,Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(
             end=if(landscape) dockWidth else 0.dp,

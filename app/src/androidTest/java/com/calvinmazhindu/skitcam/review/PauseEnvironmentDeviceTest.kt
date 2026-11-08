@@ -114,7 +114,8 @@ class PauseEnvironmentDeviceTest {
         }
     }
     private fun assertReviewActionsVisible() {
-        for (label in listOf("Discard", "Trim", "Close")) {
+        await("inline trim track") { node { it.contentDescription?.toString() == "Trim timeline" } != null }
+        for (label in listOf("Discard", "Play from here", "Close")) {
             await("$label visible") { node { it.text?.toString() == label } != null }
             var target = node { it.text?.toString() == label }!!
             while (!target.isClickable && target.parent != null) target = target.parent
