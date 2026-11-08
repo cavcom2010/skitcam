@@ -28,7 +28,7 @@ class TrimViewModel : ViewModel() {
         draft = previous?.withObservedDuration(duration) ?: TrimRange.full(duration)
         notice = when {
             segment?.invalidTrimJson != null -> "Saved trim is invalid. Reset and Save to replace it."
-            source.durationMs != duration || previous?.sourceDurationMs?.let { it != duration } == true ->
+            durationMetadataMismatch(source.durationMs, duration, previous?.sourceDurationMs) ->
                 "Source duration differs from metadata. Check the range before saving."
             segment?.trim == null -> "Full source selected. Save verifies this legacy segment's duration."
             else -> null
@@ -56,3 +56,13 @@ class TrimViewModel : ViewModel() {
         }
     }
 }
+
+/** Container metadata and playback presentation may round by a few frames. Save still validates exactly. */
+internal const val TRIM_DURATION_TOLERANCE_MS = 100L
+
+internal fun durationMetadataMismatch(sourceDurationMs: Long, playerDurationMs: Long,
+    savedSourceDurationMs: Long?): Boolean =
+    kotlin.math.abs(sourceDurationMs - playerDurationMs) > TRIM_DURATION_TOLERANCE_MS ||
+        savedSourceDurationMs?.let {
+            kotlin.math.abs(it - playerDurationMs) > TRIM_DURATION_TOLERANCE_MS
+        } == true

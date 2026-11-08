@@ -294,8 +294,12 @@ class M12ADeviceTest {
         screenshot("playback-portrait")
         main { activity.playback.toggleLoop() }
         assertFalse(main { activity.playback.loop })
-        // The paused dock remains available beside the playback surface. RESUME must
-        // close/release the player before the next segment starts.
+        // Immersive playback hides the paused dock. Closing it must release the player
+        // before RESUME can start the next segment.
+        description("Close playback")
+        await("playback released before resume") {
+            main { activity.playback.player == null && activity.playback.plan == null }
+        }
         click { it.text?.toString() == "RESUME" }
         state(RecordingState.Recording)
         assertNull(main { activity.playback.player })

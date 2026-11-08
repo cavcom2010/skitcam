@@ -11,6 +11,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import com.calvinmazhindu.skitcam.recording.Session
@@ -39,6 +40,8 @@ class SkitPlaybackController(context: Context) {
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var videoAspect by mutableStateOf<Float?>(null)
+        private set
     val positionMs: Long get() = player?.currentPosition?.coerceAtLeast(0) ?: 0
     val durationMs: Long get() = player?.duration?.takeIf { it > 0 } ?: 0
 
@@ -56,6 +59,7 @@ class SkitPlaybackController(context: Context) {
         currentIndex = 0
         currentSegmentId = next.clips.first().segmentId
         finished = false
+        videoAspect = null
         val missing = next.clips.firstOrNull { !readable(it.path) }
         if (missing != null) {
             active = true
@@ -80,10 +84,15 @@ class SkitPlaybackController(context: Context) {
                     currentSegmentId = id
                 }
                 finished = false
+                videoAspect = null
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) finished = true
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                if (player === current) videoAspect = aspect(videoSize)
             }
 
             override fun onPlayerError(playbackException: PlaybackException) {
@@ -154,7 +163,15 @@ class SkitPlaybackController(context: Context) {
         currentSegmentId = null
         finished = false
         error = null
+        videoAspect = null
         releasePlayer()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun aspect(size: VideoSize): Float? {
+        if (size.width <= 0 || size.height <= 0) return null
+        val raw = size.width.toFloat() * size.pixelWidthHeightRatio / size.height
+        return if (size.unappliedRotationDegrees % 180 == 0) raw else 1f / raw
     }
 
     private fun mediaItem(clip: PlaybackClip): MediaItem {

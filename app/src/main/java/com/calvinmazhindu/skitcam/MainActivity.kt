@@ -168,6 +168,7 @@ internal fun MainActivity.CameraScreen() {
     val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
     val reviewing = review.selection != null && arrangement.draft == null && trimModel.segment == null && !finishing
+    val immersiveVideoUi = reviewing || playback.active || trimModel.segment != null
     // This owner survives Photo/Video control changes and the finishing overlay.
     SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
     val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
@@ -353,7 +354,7 @@ internal fun MainActivity.CameraScreen() {
                 }
             )
         }
-        if(granted && camera.ready && recovered && !reviewing) {
+        if(granted && camera.ready && recovered && !immersiveVideoUi) {
             val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else stringResource(R.string.front_camera)
             CameraHeader(
                 photo=photo,
@@ -380,7 +381,7 @@ internal fun MainActivity.CameraScreen() {
         if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
-            val pausedModifier = if (reviewing) Modifier.fillMaxSize() else Modifier.fillMaxSize()
+            val pausedModifier = if (immersiveVideoUi) Modifier.fillMaxSize() else Modifier.fillMaxSize()
                 .padding(top = top, bottom = if (landscape) 0.dp else bottom,
                     end = if (landscape) dockWidth else 0.dp)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -388,7 +389,7 @@ internal fun MainActivity.CameraScreen() {
                 .padding(8.dp)
             if (playback.active) {
                 SkitPlaybackScreen(playback, pausedModifier) { playback.close() }
-            } else {
+            } else if (!arranging) {
                 PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
                     onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = pausedModifier,
                     onPlayFromBeginning = { snapshot.session?.let { review.close(); playback.play(it) } },
@@ -403,7 +404,7 @@ internal fun MainActivity.CameraScreen() {
                 onSelect={ photos.cancelTimer();selectCamera(mode=it) }
             )
         }
-        if (!reviewing) Column(
+        if (!immersiveVideoUi) Column(
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }

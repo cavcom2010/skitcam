@@ -191,7 +191,7 @@ class TrimDeviceTest {
         val chosen = main { trim.draft!! }
         assertTrue("End handle did not move: $chosen", chosen.trimEndMs < chosen.sourceDurationMs)
         assertTrue("Drag did not trim: $chosen; error=${main { trim.error }}",chosen.isTrimmed); assertTrue("Invalid draft $chosen",chosen.valid())
-        text("Play / Pause")
+        description("Play")
         await("playing clipped interval") { main { review.player?.isPlaying == true } }
         await("stops at clip end") { main { review.player?.playbackState == Player.STATE_ENDED } }
         main { assertTrue(review.player!!.currentPosition <= chosen.effectiveDurationMs + 100) }

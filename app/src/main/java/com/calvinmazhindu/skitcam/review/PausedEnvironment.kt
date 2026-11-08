@@ -1,10 +1,10 @@
 package com.calvinmazhindu.skitcam.review
 
-import android.view.LayoutInflater
-import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -34,13 +34,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
-import com.calvinmazhindu.skitcam.R
 import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
 import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.ui.video.ImmersiveVideoScaffold
+import com.calvinmazhindu.skitcam.ui.video.VideoScreenHeader
+import com.calvinmazhindu.skitcam.ui.video.VideoSurface
+import com.calvinmazhindu.skitcam.ui.video.VideoTransportControls
+import com.calvinmazhindu.skitcam.ui.video.formatClipDuration
+import com.calvinmazhindu.skitcam.ui.video.rememberVideoPlaybackState
+import com.calvinmazhindu.skitcam.ui.video.segmentVideoAspect
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -145,6 +150,8 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     }
 }
 
+private fun segmentStatusColor(kept: Boolean) = if (kept) SkitCamColors.Success else SkitCamColors.Error
+
 @Composable
 private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: ThumbnailLoader,
     enabled: Boolean, saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
@@ -157,7 +164,9 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
     val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
     Box(Modifier.width(if (landscape) 112.dp else 80.dp).heightIn(min = 100.dp)) {
         Card(onClick = onOpen, enabled = !saving,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp).clearAndSetSemantics {
+            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp)
+                .border(1.5.dp, segmentStatusColor(segment.kept), MaterialTheme.shapes.small)
+                .clearAndSetSemantics {
                 contentDescription = "Review segment ${segment.order}, $disposition$availability"
                 stateDescription = when (thumbnail) {
                     is ThumbnailResult.Ready -> "Thumbnail ready"
@@ -178,8 +187,6 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
                     }
                 }
                 Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}", style = MaterialTheme.typography.labelSmall)
-                Text(disposition, style = MaterialTheme.typography.labelSmall,
-                    color = if (segment.kept) Color.White else Color(0xFFF2D4BC))
             }
         }
         Box(Modifier.align(Alignment.TopEnd)) {
@@ -214,129 +221,145 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     onTrim: (() -> Unit)?, onPlayFrom: (() -> Unit)?, onDecide: (Segment, Boolean) -> Unit,
     playFrom: (Segment) -> (() -> Unit)?) {
     val density = LocalDensity.current
-    Box(Modifier.fillMaxSize().background(SkitCamColors.Ink)) {
-        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-            val wide = maxWidth > maxHeight
-            val aspect = reviewAspect(segment, review.videoAspect, if (wide) 16f / 9f else 9f / 16f)
-            val shelfHeight = if (density.fontScale > 1.5f) 116.dp else 100.dp
-            if (wide) {
-                val railWidth = minOf(if (density.fontScale > 1.5f) 240.dp else 200.dp, maxWidth * 0.38f)
-                Row(Modifier.fillMaxSize()) {
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().padding(6.dp)) {
-                        val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
-                        if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
-                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
+    val playback = rememberVideoPlaybackState(review.player)
+    fun togglePlayback() {
+        val player = review.player ?: return
+        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+        if (player.isPlaying) player.pause() else player.play()
+    }
+    @Composable
+    fun videoControls(modifier: Modifier = Modifier) {
+        VideoTransportControls(
+            playing = playback.playing,
+            positionMs = playback.positionMs,
+            durationMs = playback.durationMs,
+            enabled = review.player != null && review.error == null,
+            onPlayPause = ::togglePlayback,
+            onSeek = { review.player?.seekTo(it) },
+            overlay = true,
+            seekContentDescription = "Seek segment ${segment.order}",
+            modifier = modifier
+        )
+    }
+    ImmersiveVideoScaffold {
+        val wide = maxWidth > maxHeight
+        val aspect = segmentVideoAspect(segment, review.videoAspect, if (wide) 16f / 9f else 9f / 16f)
+        val shelfHeight = if (density.fontScale > 1.5f) 116.dp else 100.dp
+        if (wide) {
+            val railWidth = minOf(if (density.fontScale > 1.5f) 240.dp else 200.dp, maxWidth * 0.38f)
+            Row(Modifier.fillMaxSize()) {
+                VideoSurface(
+                    player = review.player,
+                    aspect = aspect,
+                    contentDescription = "Segment ${segment.order} playback",
+                    modifier = Modifier.weight(1f).fillMaxHeight().padding(6.dp)
+                ) { videoControls(Modifier.align(Alignment.BottomCenter)) }
+                Column(Modifier.width(railWidth).fillMaxHeight().padding(end = 4.dp)) {
+                    VideoScreenHeader(
+                        title = reviewTitle(segment, false),
+                        subtitle = reviewSubtitle(segment),
+                        onClose = { review.close() }
+                    )
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(bottom = 8.dp)) {
+                        item {
+                            ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
+                                showClose = false)
                         }
-                    }
-                    Column(Modifier.width(railWidth).fillMaxHeight().padding(end = 4.dp)) {
-                        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) { ReviewHeader(segment, false) }
-                            CloseReviewButton(review)
-                        }
-                        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            contentPadding = PaddingValues(bottom = 8.dp)) {
-                            item {
-                                if (review.player != null) Text(review.playbackLabel,
-                                    style = MaterialTheme.typography.labelSmall)
-                                ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
-                                    showClose = false)
-                            }
-                            item { Text("Clips", style = MaterialTheme.typography.labelSmall) }
-                            items(session.segments, key = { it.id }) { item ->
-                                ReviewThumbnailCard(item, loader, true, review.saving,
-                                    { review.open(session.id, item) }, { onDecide(item, it) }, playFrom(item),
-                                    row = true, modifier = Modifier.fillMaxWidth())
-                            }
+                        item { Text("Clips", style = MaterialTheme.typography.labelSmall) }
+                        items(session.segments, key = { it.id }) { item ->
+                            ReviewThumbnailCard(item, loader, true, review.saving,
+                                { review.open(session.id, item) }, { onDecide(item, it) }, playFrom(item),
+                                row = true, selected = item.id == segment.id, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
-            } else {
-                Column(Modifier.fillMaxSize()) {
-                    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { ReviewHeader(segment, false) }
-                        CloseReviewButton(review)
-                    }
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp)) {
-                        val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
-                        if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
-                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
-                        }
-                    }
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
-                        if (review.player != null) Text(review.playbackLabel,
-                            style = MaterialTheme.typography.labelSmall)
-                        ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
-                            showClose = false)
-                    }
-                    ReviewShelfRow(session, review, loader, shelfHeight, onDecide, playFrom)
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                VideoScreenHeader(
+                    title = reviewTitle(segment, false),
+                    subtitle = reviewSubtitle(segment),
+                    onClose = { review.close() }
+                )
+                VideoSurface(
+                    player = review.player,
+                    aspect = aspect,
+                    contentDescription = "Segment ${segment.order} playback",
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp)
+                ) { videoControls(Modifier.align(Alignment.BottomCenter)) }
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+                    ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
+                        showClose = false)
                 }
+                ReviewShelfRow(session, segment.id, review, loader, shelfHeight, onDecide, playFrom)
             }
         }
     }
 }
 
 @Composable
-private fun ReviewShelfRow(session: Session, review: SegmentReviewController, loader: ThumbnailLoader,
-    height: Dp, onDecide: (Segment, Boolean) -> Unit, playFrom: (Segment) -> (() -> Unit)?) {
+private fun ReviewShelfRow(session: Session, selectedId: String, review: SegmentReviewController,
+    loader: ThumbnailLoader, height: Dp, onDecide: (Segment, Boolean) -> Unit,
+    playFrom: (Segment) -> (() -> Unit)?) {
     LazyRow(Modifier.fillMaxWidth().height(height).background(Color.Black.copy(alpha = 0.55f))
         .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         items(session.segments, key = { it.id }) { item ->
             ReviewThumbnailCard(item, loader, true, review.saving,
                 { review.open(session.id, item) }, { onDecide(item, it) }, playFrom(item),
-                row = false, modifier = Modifier.fillMaxHeight().width(96.dp))
+                row = false, selected = item.id == selectedId, modifier = Modifier.fillMaxHeight().width(96.dp))
         }
     }
 }
 
 @Composable
-private fun CloseReviewButton(review: SegmentReviewController) {
-    TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
-        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
-        contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Close") }
-}
-
-@Composable
 private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabled: Boolean,
     saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
-    onPlayFrom: (() -> Unit)?, row: Boolean, modifier: Modifier = Modifier) {
+    onPlayFrom: (() -> Unit)?, row: Boolean, selected: Boolean = false,
+    modifier: Modifier = Modifier) {
     val thumbnail by produceState<ThumbnailResult>(ThumbnailResult.Loading, segment.path, enabled) {
         if (enabled) value = loader.load(segment)
     }
     var actions by remember(segment.id) { mutableStateOf(false) }
     val disposition = if (segment.kept) "Kept" else "Discarded"
     val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
-    Box(modifier) {
+    Box(modifier.then(if (selected) Modifier.border(2.dp, SkitCamColors.Warm,
+        MaterialTheme.shapes.small).padding(2.dp) else Modifier)) {
         Card(onClick = onOpen, enabled = !saving,
+            border = BorderStroke(1.5.dp, segmentStatusColor(segment.kept)),
             modifier = Modifier.fillMaxWidth()
                 .then(if (row) Modifier.heightIn(min = 68.dp) else Modifier.fillMaxSize())
                 .clearAndSetSemantics {
                     contentDescription = "Review segment ${segment.order}, $disposition$availability"
-                    stateDescription = when (thumbnail) {
-                        is ThumbnailResult.Ready -> "Thumbnail ready"
-                        ThumbnailResult.Loading -> "Loading thumbnail"
-                        ThumbnailResult.Unavailable -> "Thumbnail unavailable"
+                    this.selected = selected
+                    stateDescription = buildString {
+                        val ready = when (thumbnail) {
+                            is ThumbnailResult.Ready -> "Thumbnail ready"
+                            ThumbnailResult.Loading -> "Loading thumbnail"
+                            ThumbnailResult.Unavailable -> "Thumbnail unavailable"
+                        }
+                        if (selected) append("Selected. ")
+                        append(ready)
                     }
                     role = Role.Button
                     onClick(label = "Review segment ${segment.order}") { onOpen(); true }
-                }, colors = CardDefaults.cardColors(containerColor = Color(0xFF25252B), contentColor = Color.White)) {
+                }, colors = CardDefaults.cardColors(
+                    containerColor = if (selected) SkitCamColors.SurfacePressed else Color(0xFF25252B),
+                    contentColor = Color.White)) {
             if (row) Row(Modifier.fillMaxWidth().padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ThumbnailFrame(thumbnail, Modifier.size(52.dp))
+                ThumbnailFrame(thumbnail, Modifier.size(52.dp), dimmed = !segment.kept)
                 Column(Modifier.weight(1f)) {
                     Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
                         style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(disposition, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                        color = if (segment.kept) Color.White else Color(0xFFF2D4BC))
                 }
                 ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
             } else {
                 Column(Modifier.fillMaxSize().padding(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    ThumbnailFrame(thumbnail, Modifier.fillMaxWidth().height(48.dp))
+                    ThumbnailFrame(thumbnail, Modifier.fillMaxWidth().height(48.dp), dimmed = !segment.kept)
                     Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
                         style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -349,8 +372,9 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
 }
 
 @Composable
-private fun ThumbnailFrame(thumbnail: ThumbnailResult, modifier: Modifier) {
-    Box(modifier.alpha(if (thumbnail is ThumbnailResult.Ready) 1f else 0.7f), contentAlignment = Alignment.Center) {
+private fun ThumbnailFrame(thumbnail: ThumbnailResult, modifier: Modifier, dimmed: Boolean = false) {
+    val baseAlpha = if (thumbnail is ThumbnailResult.Ready) 1f else 0.7f
+    Box(modifier.alpha(if (dimmed) baseAlpha * 0.45f else baseAlpha), contentAlignment = Alignment.Center) {
         when (thumbnail) {
             is ThumbnailResult.Ready -> Image(thumbnail.bitmap.asImageBitmap(), null,
                 Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -390,17 +414,32 @@ private fun ThumbnailMenu(segment: Segment, saving: Boolean, expanded: Boolean,
     }
 }
 
-private fun reviewAspect(segment: Segment, reported: Float?, fallback: Float): Float =
-    segment.media?.takeIf { it.valid() }?.let {
-        ViewfinderGeometry.aspect(it.width, it.height, it.rotation)
-    } ?: reported ?: fallback
-
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
     review: SegmentReviewController, readOnly: Boolean = false, onTrim: (() -> Unit)? = null,
     onPlayFrom: (() -> Unit)? = null, horizontal: Boolean = false) {
-    val aspect = reviewAspect(segment, review.videoAspect, if (horizontal) 16f / 9f else 9f / 16f)
+    val aspect = segmentVideoAspect(segment, review.videoAspect, if (horizontal) 16f / 9f else 9f / 16f)
+    val playback = rememberVideoPlaybackState(review.player)
+    fun togglePreviewPlayback() {
+        val player = review.player ?: return
+        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+        if (player.isPlaying) player.pause() else player.play()
+    }
+    @Composable
+    fun previewControls(modifier: Modifier = Modifier) {
+        VideoTransportControls(
+            playing = playback.playing,
+            positionMs = playback.positionMs,
+            durationMs = playback.durationMs,
+            enabled = review.player != null && review.error == null,
+            onPlayPause = ::togglePreviewPlayback,
+            onSeek = { review.player?.seekTo(it) },
+            overlay = true,
+            seekContentDescription = "Seek preview",
+            modifier = modifier
+        )
+    }
     if (horizontal) {
         Surface(Modifier.fillMaxSize().padding(4.dp), color = Color(0xF218181E), contentColor = Color.White,
             shape = MaterialTheme.shapes.medium) {
@@ -408,7 +447,10 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                 BoxWithConstraints(Modifier.weight(0.62f).fillMaxHeight()) {
                     val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
                     if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
-                        ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                        VideoSurface(review.player, aspect,
+                            "Preview segment ${segment.order}", Modifier.fillMaxSize()) {
+                            previewControls(Modifier.align(Alignment.BottomCenter))
+                        }
                     }
                 }
                 Column(Modifier.weight(0.38f).fillMaxHeight().verticalScroll(rememberScrollState()),
@@ -435,7 +477,10 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                         val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
                         if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
-                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                            VideoSurface(review.player, aspect,
+                            "Preview segment ${segment.order}", Modifier.fillMaxSize()) {
+                            previewControls(Modifier.align(Alignment.BottomCenter))
+                        }
                         }
                     }
                     Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
@@ -446,31 +491,18 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
     }
 }
 
+private fun reviewTitle(segment: Segment, readOnly: Boolean): String =
+    if (readOnly) "Preview segment ${segment.order}" else
+        "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}"
+
+private fun reviewSubtitle(segment: Segment): String =
+    if (segment.invalidTrimJson != null) "Trim needs attention" else
+        "${formatClipDuration(segment.displayDurationMs)}${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}"
+
 @Composable
 private fun ReviewHeader(segment: Segment, readOnly: Boolean) {
-    Text(if (readOnly) "Preview segment ${segment.order}" else
-        "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
-        style = MaterialTheme.typography.titleSmall)
-    Text(if (segment.invalidTrimJson != null) "Trim needs attention" else
-        "${formatClipDuration(segment.displayDurationMs)}${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
-        style = MaterialTheme.typography.labelSmall)
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-private fun ReviewPlayer(segment: Segment, review: SegmentReviewController, modifier: Modifier) {
-    val player = review.player ?: return
-    AndroidView(factory = { context ->
-        (LayoutInflater.from(context).inflate(R.layout.segment_player, FrameLayout(context), false) as PlayerView).apply {
-            setShowNextButton(false)
-            setShowPreviousButton(false)
-            setShowFastForwardButton(false)
-            setShowRewindButton(false)
-            contentDescription = "Segment ${segment.order} playback"
-            controllerShowTimeoutMs = 0
-            this.player = player
-        }
-    }, update = { it.player = player }, onRelease = { it.player = null }, modifier = modifier)
+    Text(reviewTitle(segment, readOnly), style = MaterialTheme.typography.titleSmall)
+    Text(reviewSubtitle(segment), style = MaterialTheme.typography.labelSmall)
 }
 
 @Composable
@@ -482,14 +514,16 @@ private fun ReviewActions(session: Session, segment: Segment, model: RecordingVi
             if (onTrim != null) TextButton(onClick = onTrim, enabled = !review.saving,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("Trim") }
             if (segment.kept) {
-                Button(onClick = { review.decide(model, false) }, enabled = !review.saving,
+                OutlinedButton(onClick = { review.decide(model, false) }, enabled = !review.saving,
                     modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
+                    border = BorderStroke(1.dp, SkitCamColors.Error.copy(alpha = 0.75f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SkitCamColors.Error),
                     contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Discard") }
             } else {
                 Button(onClick = { review.decide(model, true) }, enabled = !review.saving,
                     modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF854C55), contentColor = Color.White),
+                    colors = ButtonDefaults.buttonColors(containerColor = SkitCamColors.RoseStrong,
+                        contentColor = Color.White),
                     contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Restore") }
             }
             if (segment.kept && onPlayFrom != null) TextButton(onClick = onPlayFrom, enabled = !review.saving,
