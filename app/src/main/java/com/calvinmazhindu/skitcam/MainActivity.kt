@@ -167,6 +167,7 @@ internal fun MainActivity.CameraScreen() {
     val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
     val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
+    val reviewing = review.selection != null && arrangement.draft == null && trimModel.segment == null && !finishing
     // This owner survives Photo/Video control changes and the finishing overlay.
     SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
     val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
@@ -352,7 +353,7 @@ internal fun MainActivity.CameraScreen() {
                 }
             )
         }
-        if(granted && camera.ready && recovered) {
+        if(granted && camera.ready && recovered && !reviewing) {
             val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else stringResource(R.string.front_camera)
             CameraHeader(
                 photo=photo,
@@ -379,7 +380,7 @@ internal fun MainActivity.CameraScreen() {
         if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
-            val pausedModifier = Modifier.fillMaxSize()
+            val pausedModifier = if (reviewing) Modifier.fillMaxSize() else Modifier.fillMaxSize()
                 .padding(top = top, bottom = if (landscape) 0.dp else bottom,
                     end = if (landscape) dockWidth else 0.dp)
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -391,7 +392,8 @@ internal fun MainActivity.CameraScreen() {
                 PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails,
                     onTrim = { trimModel.open(snapshot.session!!, it) }, modifier = pausedModifier,
                     onPlayFromBeginning = { snapshot.session?.let { review.close(); playback.play(it) } },
-                    onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } })
+                    onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } },
+                    immersiveReview = reviewing)
             }
         }
         val modeSelector: @Composable () -> Unit = {
@@ -401,7 +403,7 @@ internal fun MainActivity.CameraScreen() {
                 onSelect={ photos.cancelTimer();selectCamera(mode=it) }
             )
         }
-        Column(
+        if (!reviewing) Column(
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }

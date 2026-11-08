@@ -4,6 +4,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     app:surface_type="texture_view"
+    app:resize_mode="fit"
     app:controller_layout_id="@layout/segment_player_controls"
     app:show_buffering="when_playing"
     app:use_controller="true" />

@@ -11,7 +11,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
 import com.calvinmazhindu.skitcam.recording.SegmentEditResult
@@ -37,11 +39,14 @@ class SegmentReviewController(context: Context) {
         private set
     var playbackLabel by mutableStateOf("Ready to play")
         private set
+    var videoAspect by mutableStateOf<Float?>(null)
+        private set
     private var generation = 0
 
     fun open(sessionId: String, segment: Segment, fullSource: Boolean = false) {
         close()
         selection = ReviewSelection(sessionId, segment.id)
+        videoAspect = null
         val file = File(segment.path)
         if (!file.isFile || !file.canRead() || file.length() == 0L) {
             error = "Video unavailable. The original file is missing or unreadable."
@@ -69,6 +74,9 @@ class SegmentReviewController(context: Context) {
                 }
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     if (player === current) playbackLabel = if (isPlaying) "Playing" else "Playback paused"
+                }
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    if (player === current) videoAspect = aspect(videoSize)
                 }
             })
             current.setMediaItem(item(file, if (fullSource) null else segment.trim?.takeIf { it.valid() }))
@@ -116,6 +124,13 @@ class SegmentReviewController(context: Context) {
             }
         }
     }
+    @Suppress("DEPRECATION")
+    private fun aspect(size: VideoSize): Float? {
+        if (size.width <= 0 || size.height <= 0) return null
+        val raw = size.width.toFloat() * size.pixelWidthHeightRatio / size.height
+        val rotation = size.unappliedRotationDegrees
+        return if (rotation % 180 == 0) raw else 1f / raw
+    }
     private fun releasePlayer() {
         val previous = player
         player = null // Ignore callbacks caused by releasing this instance.
@@ -130,5 +145,6 @@ class SegmentReviewController(context: Context) {
         saving = false
         pendingSegmentId = null
         playbackLabel = "Ready to play"
+        videoAspect = null
     }
 }

@@ -244,12 +244,16 @@ class CameraUxDeviceTest {
             inst.runOnMainSync { ready=activity.reviewController.player?.playbackState==androidx.media3.common.Player.STATE_READY }
             ready
         }
-        for(label in listOf("Trim","Discard","Close")) {
-            val r=target(label)
-            assertFalse("$label collides with RESUME",android.graphics.Rect.intersects(r,resume))
-        }
+        assertNull("Capture dock hidden during review",find("Resume recording"))
+        assertNull("Capture dock hidden during review",find("Stop recording"))
+        assertNull("Camera header hidden during review",find("Settings"))
+        val reviewRects=listOf("Trim","Discard","Close").map { it to target(it) }
+        for((first,rect) in reviewRects) for((second,other) in reviewRects) if(first<second)
+            assertFalse("$first collides with $second",android.graphics.Rect.intersects(rect,other))
+        await("review shelf preserved") { find("Review segment 1,",prefix=true)!=null }
         shot("immersive-review-portrait")
         click("Close")
+        await("paused controls restored") { find("Resume recording")!=null && find("Stop recording")!=null }
         click("Resume recording")
         await("resumed") { model.snapshots.value.state==RecordingState.Recording && model.snapshots.value.activeDurationMs>=1500 }
         target("Pause recording");target("Stop recording")

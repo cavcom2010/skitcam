@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -30,12 +31,16 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.calvinmazhindu.skitcam.R
+import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
 import com.calvinmazhindu.skitcam.recording.*
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -43,7 +48,7 @@ import java.io.File
 fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingViewModel,
     review: SegmentReviewController, loader: ThumbnailLoader, modifier: Modifier = Modifier,
     onTrim: (Segment) -> Unit = {}, onPlayFromBeginning: (() -> Unit)? = null,
-    onPlayFrom: ((Segment) -> Unit)? = null) {
+    onPlayFrom: ((Segment) -> Unit)? = null, immersiveReview: Boolean = true) {
     val selected = review.selection?.takeIf { it.sessionId == session.id }
     val segment = session.segments.find { it.id == selected?.segmentId }
     BackHandler(enabled = selected != null) { review.close() }
@@ -82,49 +87,56 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
         if (item.kept && onPlayFrom != null) ({ onPlayFrom(item) }) else null
 
     Box(modifier) {
-        Column(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    val clipCount = session.segments.size
-                    Text("${session.retainedCount} kept · $clipCount ${if (clipCount == 1) "clip" else "clips"}",
-                        Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                    Button(onClick = { onPlayFromBeginning?.invoke() },
-                        enabled = playEnabled && onPlayFromBeginning != null && !review.saving,
-                        modifier = Modifier.heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Play skit from beginning" }) {
-                        Text("Play skit")
-                    }
-                }
-                if (!playEnabled) Text("No kept clips to play.", style = MaterialTheme.typography.labelSmall)
-            }
-            if (landscape) {
-                Column(Modifier.weight(1f)) {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        if (segment != null) ReviewPanel(session, segment, model, review,
-                            onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment), horizontal = true)
-                    }
-                    LazyRow(Modifier.fillMaxWidth().height(112.dp).background(Color.Black.copy(alpha = 0.55f))
-                        .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(session.segments, key = { it.id }) { item ->
-                            ThumbnailCard(item, true, loader, thumbnailsEnabled, review.saving,
-                                { review.open(session.id, item) }, { decide(item, it) }, playFrom(item))
+        if (immersiveReview && segment != null) {
+            ImmersiveReview(session, segment, model, review, loader,
+                onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment),
+                onDecide = { item, kept -> decide(item, kept) },
+                playFrom = { item -> playFrom(item) })
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        val clipCount = session.segments.size
+                        Text("${session.retainedCount} kept · $clipCount ${if (clipCount == 1) "clip" else "clips"}",
+                            Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                        Button(onClick = { onPlayFromBeginning?.invoke() },
+                            enabled = playEnabled && onPlayFromBeginning != null && !review.saving,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                                .semantics { contentDescription = "Play skit from beginning" }) {
+                            Text("Play skit")
                         }
                     }
+                    if (!playEnabled) Text("No kept clips to play.", style = MaterialTheme.typography.labelSmall)
                 }
-            } else {
-                Row(Modifier.weight(1f)) {
-                    LazyColumn(Modifier.width(88.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.55f))
-                        .padding(4.dp).semantics { contentDescription = "Completed segments, vertical strip" },
-                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(session.segments, key = { it.id }) { item ->
-                            ThumbnailCard(item, false, loader, thumbnailsEnabled, review.saving,
-                                { review.open(session.id, item) }, { decide(item, it) }, playFrom(item))
+                if (landscape) {
+                    Column(Modifier.weight(1f)) {
+                        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            if (segment != null) ReviewPanel(session, segment, model, review,
+                                onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment), horizontal = true)
+                        }
+                        LazyRow(Modifier.fillMaxWidth().height(112.dp).background(Color.Black.copy(alpha = 0.55f))
+                            .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(session.segments, key = { it.id }) { item ->
+                                ThumbnailCard(item, true, loader, thumbnailsEnabled, review.saving,
+                                    { review.open(session.id, item) }, { decide(item, it) }, playFrom(item))
+                            }
                         }
                     }
-                    Box(Modifier.weight(1f).fillMaxHeight().padding(start = 8.dp), contentAlignment = Alignment.Center) {
-                        if (segment != null) ReviewPanel(session, segment, model, review,
-                            onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment))
+                } else {
+                    Row(Modifier.weight(1f)) {
+                        LazyColumn(Modifier.width(88.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.55f))
+                            .padding(4.dp).semantics { contentDescription = "Completed segments, vertical strip" },
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(session.segments, key = { it.id }) { item ->
+                                ThumbnailCard(item, false, loader, thumbnailsEnabled, review.saving,
+                                    { review.open(session.id, item) }, { decide(item, it) }, playFrom(item))
+                            }
+                        }
+                        Box(Modifier.weight(1f).fillMaxHeight().padding(start = 8.dp), contentAlignment = Alignment.Center) {
+                            if (segment != null) ReviewPanel(session, segment, model, review,
+                                onTrim = trimIfReadable(segment), onPlayFrom = playFrom(segment))
+                        }
                     }
                 }
             }
@@ -165,7 +177,7 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
                         ThumbnailResult.Unavailable -> Text("Unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
                 }
-                Text("${segment.order} · ${segment.displayDurationMs / 1000}s", style = MaterialTheme.typography.labelSmall)
+                Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}", style = MaterialTheme.typography.labelSmall)
                 Text(disposition, style = MaterialTheme.typography.labelSmall,
                     color = if (segment.kept) Color.White else Color(0xFFF2D4BC))
             }
@@ -196,17 +208,208 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
     }
 }
 
+@Composable
+private fun ImmersiveReview(session: Session, segment: Segment, model: RecordingViewModel,
+    review: SegmentReviewController, loader: ThumbnailLoader,
+    onTrim: (() -> Unit)?, onPlayFrom: (() -> Unit)?, onDecide: (Segment, Boolean) -> Unit,
+    playFrom: (Segment) -> (() -> Unit)?) {
+    val density = LocalDensity.current
+    Box(Modifier.fillMaxSize().background(SkitCamColors.Ink)) {
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+            val wide = maxWidth > maxHeight
+            val aspect = reviewAspect(segment, review.videoAspect, if (wide) 16f / 9f else 9f / 16f)
+            val shelfHeight = if (density.fontScale > 1.5f) 116.dp else 100.dp
+            if (wide) {
+                val railWidth = minOf(if (density.fontScale > 1.5f) 240.dp else 200.dp, maxWidth * 0.38f)
+                Row(Modifier.fillMaxSize()) {
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().padding(6.dp)) {
+                        val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
+                        if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
+                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                        }
+                    }
+                    Column(Modifier.width(railWidth).fillMaxHeight().padding(end = 4.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) { ReviewHeader(segment, false) }
+                            CloseReviewButton(review)
+                        }
+                        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            contentPadding = PaddingValues(bottom = 8.dp)) {
+                            item {
+                                if (review.player != null) Text(review.playbackLabel,
+                                    style = MaterialTheme.typography.labelSmall)
+                                ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
+                                    showClose = false)
+                            }
+                            item { Text("Clips", style = MaterialTheme.typography.labelSmall) }
+                            items(session.segments, key = { it.id }) { item ->
+                                ReviewThumbnailCard(item, loader, true, review.saving,
+                                    { review.open(session.id, item) }, { onDecide(item, it) }, playFrom(item),
+                                    row = true, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 2.dp, top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { ReviewHeader(segment, false) }
+                        CloseReviewButton(review)
+                    }
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp)) {
+                        val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
+                        if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
+                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                        }
+                    }
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+                        if (review.player != null) Text(review.playbackLabel,
+                            style = MaterialTheme.typography.labelSmall)
+                        ReviewActions(session, segment, model, review, false, onTrim, onPlayFrom,
+                            showClose = false)
+                    }
+                    ReviewShelfRow(session, review, loader, shelfHeight, onDecide, playFrom)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewShelfRow(session: Session, review: SegmentReviewController, loader: ThumbnailLoader,
+    height: Dp, onDecide: (Segment, Boolean) -> Unit, playFrom: (Segment) -> (() -> Unit)?) {
+    LazyRow(Modifier.fillMaxWidth().height(height).background(Color.Black.copy(alpha = 0.55f))
+        .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(session.segments, key = { it.id }) { item ->
+            ReviewThumbnailCard(item, loader, true, review.saving,
+                { review.open(session.id, item) }, { onDecide(item, it) }, playFrom(item),
+                row = false, modifier = Modifier.fillMaxHeight().width(96.dp))
+        }
+    }
+}
+
+@Composable
+private fun CloseReviewButton(review: SegmentReviewController) {
+    TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
+        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
+        contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Close") }
+}
+
+@Composable
+private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabled: Boolean,
+    saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
+    onPlayFrom: (() -> Unit)?, row: Boolean, modifier: Modifier = Modifier) {
+    val thumbnail by produceState<ThumbnailResult>(ThumbnailResult.Loading, segment.path, enabled) {
+        if (enabled) value = loader.load(segment)
+    }
+    var actions by remember(segment.id) { mutableStateOf(false) }
+    val disposition = if (segment.kept) "Kept" else "Discarded"
+    val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
+    Box(modifier) {
+        Card(onClick = onOpen, enabled = !saving,
+            modifier = Modifier.fillMaxWidth()
+                .then(if (row) Modifier.heightIn(min = 68.dp) else Modifier.fillMaxSize())
+                .clearAndSetSemantics {
+                    contentDescription = "Review segment ${segment.order}, $disposition$availability"
+                    stateDescription = when (thumbnail) {
+                        is ThumbnailResult.Ready -> "Thumbnail ready"
+                        ThumbnailResult.Loading -> "Loading thumbnail"
+                        ThumbnailResult.Unavailable -> "Thumbnail unavailable"
+                    }
+                    role = Role.Button
+                    onClick(label = "Review segment ${segment.order}") { onOpen(); true }
+                }, colors = CardDefaults.cardColors(containerColor = Color(0xFF25252B), contentColor = Color.White)) {
+            if (row) Row(Modifier.fillMaxWidth().padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ThumbnailFrame(thumbnail, Modifier.size(52.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
+                        style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(disposition, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                        color = if (segment.kept) Color.White else Color(0xFFF2D4BC))
+                }
+                ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
+            } else {
+                Column(Modifier.fillMaxSize().padding(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    ThumbnailFrame(thumbnail, Modifier.fillMaxWidth().height(48.dp))
+                    Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
+                        style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        if (!row) Box(Modifier.align(Alignment.TopEnd)) {
+            ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailFrame(thumbnail: ThumbnailResult, modifier: Modifier) {
+    Box(modifier.alpha(if (thumbnail is ThumbnailResult.Ready) 1f else 0.7f), contentAlignment = Alignment.Center) {
+        when (thumbnail) {
+            is ThumbnailResult.Ready -> Image(thumbnail.bitmap.asImageBitmap(), null,
+                Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            ThumbnailResult.Loading -> Text("…", color = Color.White)
+            ThumbnailResult.Unavailable -> Text("Unavailable", color = Color.White,
+                style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailMenu(segment: Segment, saving: Boolean, expanded: Boolean,
+    onExpand: () -> Unit, onDismiss: () -> Unit, onDecide: (Boolean) -> Unit,
+    onPlayFrom: (() -> Unit)?) {
+    Box {
+        IconButton(onClick = onExpand, enabled = !saving,
+            modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.45f))
+                .semantics { contentDescription = "More actions for segment ${segment.order}" }) {
+            Text("⋮", color = Color.White, style = MaterialTheme.typography.titleMedium)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+            if (segment.kept) {
+                DropdownMenuItem(text = { Text("Discard") }, enabled = !saving,
+                    modifier = Modifier.semantics { contentDescription = "Discard segment ${segment.order}" },
+                    onClick = { onDismiss(); onDecide(false) })
+            } else {
+                DropdownMenuItem(text = { Text("Restore") }, enabled = !saving,
+                    modifier = Modifier.semantics { contentDescription = "Restore segment ${segment.order}" },
+                    onClick = { onDismiss(); onDecide(true) })
+            }
+            if (segment.kept && onPlayFrom != null) {
+                DropdownMenuItem(text = { Text("Play from here") }, enabled = !saving,
+                    modifier = Modifier.semantics { contentDescription = "Play from segment ${segment.order}" },
+                    onClick = { onDismiss(); onPlayFrom() })
+            }
+        }
+    }
+}
+
+private fun reviewAspect(segment: Segment, reported: Float?, fallback: Float): Float =
+    segment.media?.takeIf { it.valid() }?.let {
+        ViewfinderGeometry.aspect(it.width, it.height, it.rotation)
+    } ?: reported ?: fallback
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingViewModel,
     review: SegmentReviewController, readOnly: Boolean = false, onTrim: (() -> Unit)? = null,
     onPlayFrom: (() -> Unit)? = null, horizontal: Boolean = false) {
+    val aspect = reviewAspect(segment, review.videoAspect, if (horizontal) 16f / 9f else 9f / 16f)
     if (horizontal) {
         Surface(Modifier.fillMaxSize().padding(4.dp), color = Color(0xF218181E), contentColor = Color.White,
             shape = MaterialTheme.shapes.medium) {
             Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.weight(0.62f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                BoxWithConstraints(Modifier.weight(0.62f).fillMaxHeight()) {
+                    val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
+                    if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
+                        ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                    }
                 }
                 Column(Modifier.weight(0.38f).fillMaxHeight().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -223,18 +426,21 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
             }
         }
     } else {
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(4.dp)) {
-            val videoHeight = (maxHeight * 0.45f).coerceIn(64.dp, 240.dp)
-            Surface(color = Color(0xF218181E), contentColor = Color.White, shape = MaterialTheme.shapes.medium) {
-                Column(Modifier.fillMaxWidth().padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ReviewHeader(segment, readOnly)
-                    if (review.player != null) {
-                        ReviewPlayer(segment, review, Modifier.fillMaxWidth().height(videoHeight))
-                        Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
+        Surface(Modifier.fillMaxSize().padding(4.dp), color = Color(0xF218181E), contentColor = Color.White,
+            shape = MaterialTheme.shapes.medium) {
+            Column(Modifier.fillMaxSize().padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ReviewHeader(segment, readOnly)
+                if (review.player != null) {
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                        val fitted = ViewfinderGeometry.fit(maxWidth.value, maxHeight.value, aspect)
+                        if (fitted != null) Box(Modifier.size(fitted.width.dp, fitted.height.dp).align(Alignment.Center)) {
+                            ReviewPlayer(segment, review, Modifier.fillMaxSize())
+                        }
                     }
-                    ReviewActions(session, segment, model, review, readOnly, onTrim, onPlayFrom)
-                }
+                    Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
+                } else Spacer(Modifier.weight(1f))
+                ReviewActions(session, segment, model, review, readOnly, onTrim, onPlayFrom)
             }
         }
     }
@@ -246,7 +452,7 @@ private fun ReviewHeader(segment: Segment, readOnly: Boolean) {
         "Review segment ${segment.order} · ${if (segment.kept) "Kept" else "Discarded"}",
         style = MaterialTheme.typography.titleSmall)
     Text(if (segment.invalidTrimJson != null) "Trim needs attention" else
-        "${segment.displayDurationMs} ms${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
+        "${formatClipDuration(segment.displayDurationMs)}${if (segment.trim?.isTrimmed == true) " · Trimmed" else if (segment.trim == null) " · estimated" else ""}",
         style = MaterialTheme.typography.labelSmall)
 }
 
