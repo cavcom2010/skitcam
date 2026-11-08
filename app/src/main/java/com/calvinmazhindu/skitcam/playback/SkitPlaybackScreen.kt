@@ -43,7 +43,8 @@ fun SkitPlaybackScreen(controller: SkitPlaybackController, modifier: Modifier = 
         duration = controller.durationMs
         playing = controller.player?.isPlaying == true
     }
-    Surface(modifier.fillMaxSize(), color = Color(0xFF101014), contentColor = Color.White) {
+    Surface(modifier.fillMaxSize(), color = com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.Ink,
+        contentColor = com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.TextPrimary) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {

@@ -101,7 +101,7 @@ class ProjectExportActivity : ComponentActivity() {
         pickerJob=savedInstanceState?.getString("pickerJob")
         originals=savedInstanceState?.getBoolean("originals") ?: true
         discarded=savedInstanceState?.getBoolean("discarded") ?: false
-        setContent { MaterialTheme(colorScheme=darkColorScheme(primary=Color(0xFFDAA0A4))) { Screen() } }
+        setContent { com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme { Screen() } }
         lifecycleScope.launch {
             try {
                 if(jobId==null) raw=withContext(Dispatchers.IO) { intent.data?.let { CompletedProjectCatalog(this@ProjectExportActivity).find(it) } }
@@ -149,7 +149,8 @@ class ProjectExportActivity : ComponentActivity() {
                 estimate=result.getOrNull();sourceError=result.exceptionOrNull()?.message
             }
         }
-        Surface(Modifier.fillMaxSize(),color=Color(0xFF101014),contentColor=Color.White) {
+        Surface(Modifier.fillMaxSize(),color=com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.Ink,
+            contentColor=com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.TextPrimary) {
             Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     CameraIconButton(CameraIcon.Back,"Back from project export") { finish() }

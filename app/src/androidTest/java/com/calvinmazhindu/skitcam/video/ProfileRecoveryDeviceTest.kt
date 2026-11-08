@@ -25,7 +25,7 @@ class ProfileRecoveryDeviceTest {
         assertTrue(message+": "+ExportJournal.status.value,block())
     }
     @Test fun a_savePausedProfileCheckpoint() {
-        check((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation")))))
+        check((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation")))))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO)) inst.uiAutomation.executeShellCommand("pm grant ${context.packageName} $p").close()
         val scenario=ActivityScenario.launch(MainActivity::class.java)
         try {
@@ -57,7 +57,7 @@ class ProfileRecoveryDeviceTest {
         } finally { scenario.close() }
     }
     @Test fun b_recoverExactProfileBeforePreferencesAndResume() {
-        check((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation")))))
+        check((context.packageName.endsWith(".m9validation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation")))))
         val checkpoint=JSONObject(File(context.filesDir,"validation-m9/recovery-checkpoint.json").readText())
         val expected=SessionCodec.decode(checkpoint.getString("metadata"))
         val scenario=ActivityScenario.launch(MainActivity::class.java)

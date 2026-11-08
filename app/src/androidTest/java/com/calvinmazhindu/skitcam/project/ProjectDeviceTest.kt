@@ -160,7 +160,7 @@ class ProjectDeviceTest {
     @Before fun guard() {
         val productionRun = context.packageName=="com.calvinmazhindu.skitcam" &&
             InstrumentationRegistry.getArguments().getString("allowProduction")=="true"
-        check(productionRun || context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
+        check(productionRun || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation"))
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
     }
     @Test fun systemPickerCreatesVerifiedPortableProjectAndCameraStillRecords() {

@@ -68,7 +68,7 @@ class CameraRotationDeviceTest {
         assertTrue("$label: ${camera.message}; ${model.snapshots.value}",condition())
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m11validation"))
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation"))
         baselineAuto=Settings.System.getInt(context.contentResolver,Settings.System.ACCELEROMETER_ROTATION,0)
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         scenario=ActivityScenario.launch(MainActivity::class.java)
@@ -208,7 +208,8 @@ class CameraRotationDeviceTest {
     }
     private fun photoLandscapeTouchControls(report: JSONObject) {
         val lensLabel=if(camera.choice.lens==CameraLens.Rear) "Switch to front camera" else "Switch to rear camera"
-        val labels=listOf("Settings","Quick settings","Take photo","Open saved media gallery",lensLabel,"Photo","Skit Video")
+        val toggleLabel=if(camera.choice.mode==CameraMode.Photo) "Video" else "Photo"
+        val labels=listOf("Settings","Quick settings","Take photo","Open saved media gallery",lensLabel,toggleLabel)
         val bounds=labels.associateWith(::touchTarget)
         val inset=report.getJSONObject("safeInsets")
         val minimum=48*activity.resources.displayMetrics.density-2
@@ -230,7 +231,7 @@ class CameraRotationDeviceTest {
             assertEquals("Overlay gaps do not zoom",1f,camera.observedZoom,.01f)
         }
         blocked(image.exactCenterX(),bounds.getValue("Settings").exactCenterY())
-        blocked(image.left+40f,bounds.getValue("Photo").exactCenterY())
+        blocked(image.left+40f,bounds.getValue(toggleLabel).exactCenterY())
         // The remaining pillarbox is outside the actual PreviewView.
         val focus=main { camera.focus }
         tap((inset.getInt("left")+image.left)/2f,image.exactCenterY())
@@ -692,7 +693,7 @@ class CameraRotationDeviceTest {
                 }
                 if(sampleOnly) waitPose(0,"return-portrait")
                 if(!baseline && !sampleOnly) {
-                    val video=touchTarget("Skit Video");tap(video.exactCenterX(),video.exactCenterY())
+                    val video=touchTarget("Video");tap(video.exactCenterX(),video.exactCenterY())
                     await("Photo-to-Video mode touch") { camera.choice.mode==CameraMode.SkitVideo && model.cameraReady }
                     geometry(shot("video-portrait-after-${lens.name}"))
                     val photo=touchTarget("Photo");tap(photo.exactCenterX(),photo.exactCenterY())

@@ -29,17 +29,24 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.compose.ui.res.stringResource
+import com.calvinmazhindu.skitcam.R
+import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusBanner
+import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusTone
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme
 
 @Composable
 fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
     val context=LocalContext.current
     var feedback by remember { mutableStateOf<String?>(null) }
     var notificationAsked by rememberSaveable { mutableStateOf(false) }
-    val notificationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-    LaunchedEffect(status.sessionId) {
-        if(Build.VERSION.SDK_INT>=33 && !notificationAsked && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            notificationAsked=true;notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+    var notificationAllowed by remember {
+        mutableStateOf(Build.VERSION.SDK_INT<33 || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED)
+    }
+    val notificationPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        notificationAllowed=it
+        notificationAsked=true
     }
     val permissions=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         try { ExportService.launch(context,status.sessionId,retry=true) } catch(e: Exception) { feedback=e.message }
@@ -48,8 +55,18 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
         if(Build.VERSION.SDK_INT<=28) permissions.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE))
         else try { ExportService.launch(context,status.sessionId,retry=true) } catch(e: Exception) { feedback=e.message }
     }
-    Surface(Modifier.fillMaxSize(),color=Color(0xFF101014),contentColor=Color.White) {
+    Surface(Modifier.fillMaxSize(),color=SkitCamColors.Ink,contentColor=SkitCamColors.TextPrimary) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(16.dp,Alignment.CenterVertically),horizontalAlignment=Alignment.CenterHorizontally) {
+            if(!notificationAsked && !notificationAllowed) {
+                Text(stringResource(R.string.notification_title),style=MaterialTheme.typography.titleMedium,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                Text(stringResource(R.string.notification_rationale),style=MaterialTheme.typography.bodyMedium,color=SkitCamColors.TextSecondary,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
+                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    Button(onClick={ notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text(stringResource(R.string.notification_allow)) }
+                    TextButton(onClick={ notificationAsked=true }) { Text(stringResource(R.string.notification_not_now),color=SkitCamColors.Warm) }
+                }
+            } else if(!notificationAllowed && notificationAsked) {
+                SkitCamStatusBanner(stringResource(R.string.notification_denied),tone=SkitCamStatusTone.Neutral)
+            }
             Text(when(status.state) {
                 ExportState.Completed -> "Opening camera"
                 ExportState.Empty -> "No kept segments"
@@ -86,8 +103,8 @@ class FinishedPlaybackActivity : ComponentActivity() {
             projectAvailable=withContext(Dispatchers.IO) { intent.data?.let { com.calvinmazhindu.skitcam.project.CompletedProjectCatalog(this@FinishedPlaybackActivity).find(it) }!=null }
         }
         setContent {
-            MaterialTheme(colorScheme=darkColorScheme()) {
-                Surface(color=Color.Black,contentColor=Color.White) {
+            SkitCamTheme {
+                Surface(color=SkitCamColors.Ink,contentColor=SkitCamColors.TextPrimary) {
                     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.SpaceBetween) {
                             com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Back,if(intent.getBooleanExtra("from_gallery",false)) "Back to gallery" else "Back to camera") { finish() }

@@ -24,7 +24,7 @@ class ExportPathsDeviceTest {
     private val inputs get()=File(context.filesDir,"validation-m12b-inputs")
     private data class Fixture(val session: Session, val hashes: List<String>)
     @Before fun guard() {
-        check(context.packageName.endsWith(".m12bvalidation"));check(!ExportJournal.busy)
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation"));check(!ExportJournal.busy)
         ExportJournal.cancelRequested=false
     }
     private fun await(label: String, condition: () -> Boolean) {

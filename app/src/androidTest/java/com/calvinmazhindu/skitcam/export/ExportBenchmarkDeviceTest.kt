@@ -67,7 +67,7 @@ class ExportBenchmarkDeviceTest {
     }
 
     @Test fun recordAndMeasure() {
-        check(context.packageName.endsWith(".m12bvalidation")) { "Isolated M12B only" }
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation")) { "Isolated M12B only" }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS))
             shell("pm grant ${context.packageName} $p")
         val kind=args.getString("case") ?: "single"

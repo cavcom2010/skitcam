@@ -5,7 +5,6 @@ import androidx.core.net.toUri
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -13,26 +12,35 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.*
-import com.calvinmazhindu.skitcam.camera.CameraSymbol
-import com.calvinmazhindu.skitcam.camera.CameraIcon
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.calvinmazhindu.skitcam.R
+import com.calvinmazhindu.skitcam.camera.CameraIcon
+import com.calvinmazhindu.skitcam.camera.CameraSymbol
+import com.calvinmazhindu.skitcam.ui.camera.CaptureDockRow
+import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamSpacing
+import kotlinx.coroutines.delay
 
 @Composable
 fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, orientation: CameraOrientationController,
     previewRotation: Int?, cameraGranted: Boolean,
-    showShortcuts: Boolean = false, verticalShutter: Boolean = false, leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
+    showShortcuts: Boolean = false, verticalShutter: Boolean = false, modeSelector: @Composable () -> Unit = {},
+    leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
     beforeRecording: () -> Unit = {}, onArrange: () -> Unit = {}, onBackground: () -> Unit = beforeRecording) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
@@ -91,62 +99,148 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
             microphoneLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+
+    val recordingStarted = stringResource(R.string.recording_started)
+    val recordingPaused = stringResource(R.string.recording_paused)
+    val recordingResumed = stringResource(R.string.recording_resumed)
+    val finishingClip = stringResource(R.string.finishing_clip)
+    val startingCamera = stringResource(R.string.starting_camera)
+    val readyToRecord = stringResource(R.string.status_ready_to_record)
+    val stopRecordingLabel = stringResource(R.string.stop_recording)
+    val resumeRecordingLabel = stringResource(R.string.resume_recording)
+    var announcement by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(snapshot.state) {
+        announcement = when (snapshot.state) {
+            RecordingState.Recording -> if (snapshot.count > 1) recordingResumed else recordingStarted
+            RecordingState.Paused -> recordingPaused
+            RecordingState.Finalising, RecordingState.Stopping -> finishingClip
+            else -> null
+        }
+        if (announcement != null) {
+            delay(2500)
+            announcement = null
+        }
+    }
+
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
         val fresh = snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed)
-        if(!fresh) {
-            val seconds=snapshot.durationMs/1000
-            Text("%02d:%02d · %d kept".format(seconds/60,seconds%60,snapshot.count),color=Color.White,
-                style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center)
+        Box(Modifier.fillMaxWidth().heightIn(min = 24.dp), contentAlignment = Alignment.Center) {
+            if (fresh) {
+                Text(readyToRecord, color = SkitCamColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.Center)
+            } else {
+                val seconds=snapshot.durationMs/1000
+                Text("%02d:%02d · %d kept".format(seconds/60,seconds%60,snapshot.count),color=SkitCamColors.TextPrimary,
+                    style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center)
+            }
         }
         @Composable fun Shutter(enabled: Boolean, label: String, icon: CameraIcon, onClick: ()->Unit) {
-            Button(onClick=onClick,enabled=enabled,shape=androidx.compose.foundation.shape.CircleShape,modifier=Modifier.size(80.dp)
+            Button(onClick=onClick,enabled=enabled,shape=CircleShape,modifier=Modifier.size(SkitCamSpacing.shutter)
                 .semantics { contentDescription=label },contentPadding=PaddingValues(0.dp),
-                colors=ButtonDefaults.buttonColors(containerColor=Color(0xFFAE3447),contentColor=Color.White)) {
-                CameraSymbol(icon,Modifier.size(36.dp),if(enabled) Color.White else Color.Gray)
+                colors=ButtonDefaults.buttonColors(
+                    containerColor=SkitCamColors.RoseStrong,
+                    contentColor=Color.White,
+                    disabledContainerColor=SkitCamColors.SurfacePressed,
+                    disabledContentColor=SkitCamColors.TextMuted
+                )) {
+                CameraSymbol(icon,Modifier.size(36.dp),if(enabled) Color.White else SkitCamColors.TextMuted)
             }
         }
-        when (snapshot.state) {
-            RecordingState.Ready, RecordingState.Completed -> {
-                @Composable fun IdleShutter() { Shutter(canStart,"Start recording",CameraIcon.Record) {
-                    releaseReview()
-                    if(!microphone) requestAudio()
-                    else pose?.let { if(orientation.lockForStart(it)) model.start(it) }
-                } }
-                if(verticalShutter) Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    leading();IdleShutter();trailing()
-                } else Row(Modifier.fillMaxWidth(),horizontalArrangement=if(showShortcuts) Arrangement.SpaceBetween else Arrangement.Center,
-                    verticalAlignment=Alignment.CenterVertically) { leading();IdleShutter();trailing() }
+        val primary: @Composable () -> Unit = {
+            when (snapshot.state) {
+                RecordingState.Ready, RecordingState.Completed -> {
+                    Shutter(canStart,stringResource(R.string.start_recording),CameraIcon.Record) {
+                        releaseReview()
+                        if(!microphone) requestAudio()
+                        else pose?.let { if(orientation.lockForStart(it)) model.start(it) }
+                    }
+                }
+                RecordingState.Recording -> Shutter(true,stringResource(R.string.pause_recording),CameraIcon.Pause) { model.pause() }
+                RecordingState.Paused -> Button(
+                    onClick={ releaseReview();if(microphone) model.resume(pose) else requestAudio() },
+                    enabled=canResume,
+                    shape=CircleShape,
+                    modifier=Modifier.size(SkitCamSpacing.shutter).semantics {
+                        contentDescription=resumeRecordingLabel
+                    },
+                    contentPadding=PaddingValues(0.dp),
+                    colors=ButtonDefaults.buttonColors(
+                        containerColor=SkitCamColors.RoseStrong,
+                        contentColor=Color.White,
+                        disabledContainerColor=SkitCamColors.SurfacePressed,
+                        disabledContentColor=SkitCamColors.TextMuted
+                    )
+                ) { Text("RESUME", style=MaterialTheme.typography.labelMedium, maxLines=1, textAlign=TextAlign.Center) }
+                else -> CircularProgressIndicator(Modifier.size(36.dp).semantics {
+                    contentDescription = when(snapshot.state) {
+                        RecordingState.Starting -> startingCamera
+                        RecordingState.Finalising, RecordingState.Stopping -> finishingClip
+                        else -> readyToRecord
+                    }
+                })
             }
-            RecordingState.Recording -> Shutter(true,"Pause recording",CameraIcon.Pause) { model.pause() }
-            RecordingState.Paused -> Button(contentPadding=PaddingValues(horizontal=12.dp,vertical=8.dp),onClick={releaseReview();if(microphone) model.resume(pose) else requestAudio()},enabled=canResume,
-                modifier=Modifier.heightIn(min=56.dp).semantics { contentDescription="Resume recording" }) { Text("RESUME",maxLines=1) }
-            else -> CircularProgressIndicator(Modifier.size(36.dp).semantics { contentDescription=snapshot.state.name })
         }
-        if (snapshot.state !in setOf(RecordingState.Ready, RecordingState.Completed)) {
-            if(snapshot.state==RecordingState.Recording) IconButton(onClick={val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap)},modifier=Modifier.size(48.dp)
-                .semantics { contentDescription="Stop recording" }) { CameraSymbol(CameraIcon.Stop) }
-            else OutlinedButton(onClick={val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap)},enabled=!snapshot.unresolved && snapshot.state in setOf(RecordingState.Error,RecordingState.Paused),
-                modifier=Modifier.heightIn(min=48.dp).semantics { contentDescription="Stop recording" }) { Text("STOP") }
-        }
-        if (snapshot.state == RecordingState.Paused) {
-            TextButton(onClick = onArrange, enabled = snapshot.count >= 2 && !snapshot.unresolved,
-                modifier = Modifier.heightIn(min = 48.dp)) {
-                Text("Arrange")
+        CaptureDockRow(
+            vertical = verticalShutter,
+            leading = leading,
+            modeSelector = modeSelector,
+            shutter = primary,
+            trailing = trailing
+        )
+        val activeSession = snapshot.state in setOf(RecordingState.Recording,RecordingState.Paused,RecordingState.Error)
+        Box(Modifier.fillMaxWidth().heightIn(min = SkitCamSpacing.touchTarget), contentAlignment = Alignment.Center) {
+            if (activeSession) {
+                val finish: @Composable () -> Unit = {
+                    SkitCamSecondaryButton(
+                        text = stringResource(R.string.finish_recording),
+                        onClick = { val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap) },
+                        enabled = snapshot.state == RecordingState.Recording || !snapshot.unresolved,
+                        modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget).semantics {
+                            contentDescription = stopRecordingLabel
+                        }
+                    )
+                }
+                val arrange: @Composable () -> Unit = {
+                    TextButton(onClick = onArrange, enabled = snapshot.state == RecordingState.Paused && snapshot.count >= 2 && !snapshot.unresolved,
+                        modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget)) {
+                        Text(stringResource(R.string.arrange), color = SkitCamColors.Warm)
+                    }
+                }
+                if (verticalShutter) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
+                        finish(); arrange()
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(SkitCamSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
+                        finish(); arrange()
+                    }
+                }
             }
         }
-        val warning = when {
-            snapshot.state == RecordingState.Error -> snapshot.message
-            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
-                if (desiredPose == null) "Hold upright to record"
-                else "Wrong orientation. Return to the original $desiredPose° direction to RESUME."
-            snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> "Match the preview orientation"
-            !microphone -> if (requested) "Microphone access is off. Tap START or RESUME to allow it in permissions or settings."
-                else "Audio is required. START requests microphone permission; press START again after allowing it."
-            else -> if(snapshot.state == RecordingState.Completed) null else snapshot.message
+        Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.TopCenter) {
+            val warning = when {
+                snapshot.state == RecordingState.Error -> snapshot.message
+                snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
+                    if (desiredPose == null) stringResource(R.string.status_orientation_upright)
+                    else stringResource(R.string.status_orientation_return, desiredPose)
+                snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> stringResource(R.string.status_match_preview)
+                !microphone -> if (requested) stringResource(R.string.status_microphone_off)
+                    else stringResource(R.string.status_microphone_request)
+                snapshot.state == RecordingState.Finalising || snapshot.state == RecordingState.Stopping -> finishingClip
+                else -> if(snapshot.state == RecordingState.Completed) null else snapshot.message
+            }
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xxs)) {
+                announcement?.let {
+                    Text(it, color = SkitCamColors.Warm, style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+                warning?.let {
+                    Text(it, color = SkitCamColors.Warning, style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
+            }
         }
-        if (warning != null) Text(warning, color = Color(0xFFF2D4BC),
-            style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
     }
 }

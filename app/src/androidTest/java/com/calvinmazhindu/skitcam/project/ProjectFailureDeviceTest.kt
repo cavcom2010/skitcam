@@ -54,7 +54,7 @@ class ProjectFailureDeviceTest {
         File(context.filesDir,"validation-m11/$id.json").writeText(j.toString(2));return j
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation"))
         val marker=File(context.filesDir,"validation-m11/fixture-session-id")
         check(marker.isFile) { "Run the system-picker fixture first." }
         raw=CompletedProjectCatalog(context).load(marker.readText());original=ProjectSnapshot.fromJournal(raw)

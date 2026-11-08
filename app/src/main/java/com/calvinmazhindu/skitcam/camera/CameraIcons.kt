@@ -12,7 +12,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 
-enum class CameraIcon { Settings, Quick, Microphone, MicOff, Record, Pause, Stop, Back, Share, More }
+enum class CameraIcon { Settings, Quick, Microphone, MicOff, Record, Photo, Play, Pause, Stop, Back, Share, More }
 
 /** Original simple geometry, independent of an external icon library. */
 @Composable
@@ -23,6 +23,17 @@ fun CameraSymbol(icon: CameraIcon, modifier: Modifier=Modifier, color: Color=Col
         when(icon) {
             CameraIcon.More -> repeat(3) { drawCircle(color,1.7f*unit,point(12f,5f+it*7f)) }
             CameraIcon.Record -> drawCircle(color,radius=size.minDimension*.30f)
+            CameraIcon.Photo -> {
+                drawRoundRect(color,point(2f,7f),Size(20*unit,14*unit),CornerRadius(3*unit),style=Stroke(stroke))
+                drawRoundRect(color,point(8f,4f),Size(8*unit,3*unit),CornerRadius(1*unit),style=Stroke(stroke))
+                drawCircle(color,4.5f*unit,point(12f,14f),style=Stroke(stroke))
+            }
+            CameraIcon.Play -> {
+                val path=androidx.compose.ui.graphics.Path().apply {
+                    moveTo(8*unit,4*unit);lineTo(20*unit,12*unit);lineTo(8*unit,20*unit);close()
+                }
+                drawPath(path,color)
+            }
             CameraIcon.Pause -> { drawRect(color,point(6f,5f),Size(4*unit,14*unit));drawRect(color,point(14f,5f),Size(4*unit,14*unit)) }
             CameraIcon.Stop -> drawRoundRect(color,point(5f,5f),Size(14*unit,14*unit),CornerRadius(2*unit))
             CameraIcon.Settings -> {

@@ -13,7 +13,7 @@ import java.io.File
 class ProjectPersistenceDeviceTest {
     private val context get()=InstrumentationRegistry.getInstrumentation().targetContext
     private fun create(): String {
-        check(context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12bvalidation"))
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation"))
         val id=File(context.filesDir,"validation-m11/fixture-session-id").readText()
         return ProjectJobs.create(context,CompletedProjectCatalog(context).load(id),ProjectOptions())
     }

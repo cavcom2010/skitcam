@@ -14,7 +14,7 @@ import java.io.File
 class ExportVerificationDeviceTest {
     @Test fun unchangedFullDecodeChecksOnTheSameBaselineBytes() {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
-        check(context.packageName.endsWith(".m12bvalidation"))
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation"))
         check(!ExportJournal.busy)
         ExportJournal.cancelRequested=false
         val reports=JSONArray()

@@ -12,10 +12,16 @@ import android.provider.Settings
 import android.os.Build
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.calvinmazhindu.skitcam.camera.*
+import com.calvinmazhindu.skitcam.ui.camera.CameraHeader
+import com.calvinmazhindu.skitcam.ui.camera.CameraModeToggle
+import com.calvinmazhindu.skitcam.ui.camera.PhotoControls
+import com.calvinmazhindu.skitcam.ui.camera.blockPreviewInput
+import com.calvinmazhindu.skitcam.ui.components.SkitCamMessagePanel
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme
 import com.calvinmazhindu.skitcam.photo.PhotoModel
 import com.calvinmazhindu.skitcam.photo.PhotoAspectRatio
 import com.calvinmazhindu.skitcam.photo.PhotoAspectSelector
@@ -93,8 +99,8 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK)
         )
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFFDAA0A4), secondaryContainer=Color(0xFF423139), onSecondaryContainer=Color(0xFFFFE6E8))) {
-                Surface(color=Color(0xFF101014),contentColor=Color.White) { CameraScreen() }
+            SkitCamTheme {
+                Surface(color=SkitCamColors.Ink,contentColor=SkitCamColors.TextPrimary) { CameraScreen() }
             }
         }
     }
@@ -278,7 +284,6 @@ internal fun MainActivity.CameraScreen() {
         mutableStateOf(preferences.getBoolean("requested", false))
     }
     var canRetry by remember { mutableStateOf(shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) }
-    var initialRequestHandled by rememberSaveable { mutableStateOf(requested || granted) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         canRetry = shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
@@ -287,12 +292,6 @@ internal fun MainActivity.CameraScreen() {
         requested = true
         preferences.edit { putBoolean("requested", true) }
         launcher.launch(Manifest.permission.CAMERA)
-    }
-    LaunchedEffect(Unit) {
-        if (!initialRequestHandled) {
-            initialRequestHandled = true
-            requestPermission()
-        }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -306,7 +305,7 @@ internal fun MainActivity.CameraScreen() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Box(Modifier.fillMaxSize().background(Color(0xFF101014))) {
+    Box(Modifier.fillMaxSize().background(SkitCamColors.Ink)) {
         if(!recovered || !camera.ready || !photos.recovered || (!orientation.ready && !camera.streaming)) {
             CameraMessage("Restoring camera…")
         } else if (granted && !(finishing && snapshot.state == RecordingState.Completed)) {
@@ -324,12 +323,27 @@ internal fun MainActivity.CameraScreen() {
         } else if (!granted) {
             val needsSettings = requested && !canRetry
             CameraMessage(
-                message = stringResource(
-                    if (needsSettings) R.string.camera_settings
-                    else if (requested) R.string.camera_denied
-                    else R.string.camera_permission
+                title = stringResource(
+                    when {
+                        needsSettings -> R.string.camera_settings_title
+                        requested -> R.string.camera_denied_title
+                        else -> R.string.camera_permission_title
+                    }
                 ),
-                action = stringResource(if (needsSettings) R.string.open_settings else R.string.allow_camera),
+                message = stringResource(
+                    when {
+                        needsSettings -> R.string.camera_settings_rationale
+                        requested -> R.string.camera_denied
+                        else -> R.string.camera_permission_rationale
+                    }
+                ),
+                action = stringResource(
+                    when {
+                        needsSettings -> R.string.open_settings
+                        requested -> R.string.allow_camera
+                        else -> R.string.camera_continue
+                    }
+                ),
                 onAction = {
                     if (needsSettings) {
                         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -338,25 +352,29 @@ internal fun MainActivity.CameraScreen() {
                 }
             )
         }
-        if(camera.ready && recovered) Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.65f),Color.Transparent)))
-            .then(if(landscape || fullPhoto) Modifier.blockPreviewInput() else Modifier)
-            .onSizeChanged { headerHeight = it.height }.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))) {
-            Row(Modifier.fillMaxWidth().padding(start=8.dp,end=if(landscape) (dockWidth+8.dp) else 8.dp).then(if(arranging) Modifier.clearAndSetSemantics {} else Modifier),
-                horizontalArrangement=Arrangement.SpaceBetween,verticalAlignment=Alignment.CenterVertically) {
-                CameraIconButton(CameraIcon.Settings,"Settings",settingsAllowed) { settings=true;quick=false }
-                val boundLabel=if(camera.streaming) camera.boundInfo?.concise ?: "Camera unavailable" else "Opening camera…"
-                val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else "Front camera"
-                if(photo) PhotoAspectSelector(camera.photoAspectRatio,lensLabel,granted && maySwitch && !camera.switching,
-                    photoRatioMenu,{photoRatioMenu=it;if(it) quick=false},
-                    { camera.photoAspect(it,switchAllowed()) },Modifier.weight(1f))
-                else Text(boundLabel,
-                    style=MaterialTheme.typography.labelMedium,modifier=Modifier.weight(1f).semantics { contentDescription="$lensLabel · $boundLabel" },maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                if(!photo && !arranging && review.selection==null) com.calvinmazhindu.skitcam.audio.AudioIndicator(recordingModel.audio)
-                CameraIconButton(CameraIcon.Quick,"Quick settings",adjustments) { quick=!quick }
-
-            }
-            if(!photo && !arranging) com.calvinmazhindu.skitcam.audio.AudioWarning(recordingModel.audio,
-                Modifier.padding(start=16.dp,end=if(landscape) (dockWidth+8.dp) else 16.dp))
+        if(granted && camera.ready && recovered) {
+            val lensLabel=if(camera.choice.lens==CameraLens.Rear) stringResource(R.string.rear_camera) else stringResource(R.string.front_camera)
+            CameraHeader(
+                photo=photo,
+                landscape=landscape,
+                fullPhoto=fullPhoto,
+                dockWidth=dockWidth,
+                arranging=arranging,
+                streaming=camera.streaming,
+                boundLabel=camera.boundInfo?.concise ?: stringResource(R.string.camera_unavailable),
+                lensLabel=lensLabel,
+                aspectRatio=camera.photoAspectRatio,
+                aspectMenuExpanded=photoRatioMenu,
+                aspectEnabled=granted && maySwitch && !camera.switching,
+                onAspectMenuChange={ photoRatioMenu=it;if(it) quick=false },
+                onAspectSelect={ camera.photoAspect(it,switchAllowed()) },
+                settingsEnabled=settingsAllowed,
+                quickEnabled=adjustments,
+                onSettings={ settings=true;quick=false },
+                onQuick={ quick=!quick },
+                audio=recordingModel.audio.takeIf { review.selection==null },
+                modifier=Modifier.onSizeChanged { headerHeight = it.height }
+            )
         }
         if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
@@ -376,6 +394,13 @@ internal fun MainActivity.CameraScreen() {
                     onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } })
             }
         }
+        val modeSelector: @Composable () -> Unit = {
+            CameraModeToggle(
+                selected=camera.choice.mode,
+                enabled=maySwitch && !camera.switching && !snapshot.openSession,
+                onSelect={ photos.cancelTimer();selectCamera(mode=it) }
+            )
+        }
         Column(
             (if (landscape) Modifier.align(Alignment.CenterEnd).width(dockWidth).fillMaxHeight()
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
@@ -391,38 +416,22 @@ internal fun MainActivity.CameraScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
         ) {
-            if(camera.ready && recovered && !finishing) {
-                if(!snapshot.openSession && !landscape) {
-                    @Composable fun ModeChip(mode: CameraMode, label: String, modifier: Modifier = Modifier) {
-                        FilterChip(selected=camera.choice.mode==mode,onClick={photos.cancelTimer();selectCamera(mode=mode)},
-                            enabled=maySwitch && !camera.switching,label={Text(label)},modifier=modifier)
-                    }
-                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        ModeChip(CameraMode.Photo,"Photo")
-                        ModeChip(CameraMode.SkitVideo,"Skit Video")
-                    }
-                }
-                if(photo) Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                    horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    @Composable fun PhotoShutter() {
-                        Button(onClick=::takePhoto,enabled=granted && maySwitch && !camera.switching,shape=CircleShape,
-                            colors=ButtonDefaults.buttonColors(containerColor=Color.Transparent,contentColor=Color.White),contentPadding=PaddingValues(0.dp),modifier=Modifier.size(80.dp)
-                                .semantics { contentDescription="Take photo" }) { androidx.compose.foundation.Canvas(Modifier.size(76.dp)) { drawCircle(Color.White,radius=size.minDimension/2-2.dp.toPx(),style=androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()));drawCircle(Color.White,radius=size.minDimension/2-8.dp.toPx()) } }
-                    }
-                    @Composable fun PhotoRecent() { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) }
-                    @Composable fun PhotoLens() { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } }
-                    if(landscape) {
-                        PhotoRecent();PhotoShutter();PhotoLens()
-                    } else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceEvenly,verticalAlignment=Alignment.CenterVertically) { PhotoRecent();PhotoShutter();PhotoLens() }
-                    if(photos.countdown>0) Text("${photos.countdown} · Cancel",modifier=Modifier.semantics { contentDescription="Photo countdown ${photos.countdown}" })
-                    if(photos.countdown>0) TextButton(onClick=photos::cancelTimer) { Text("Cancel timer") }
-                    if(photos.canRetry) Text("Photo awaiting save",style=MaterialTheme.typography.labelSmall)
-                    else if(!photos.lastSaveSucceeded) photos.message?.let { Text(it,style=MaterialTheme.typography.labelSmall) }
-                    if(photos.busy && photos.countdown==0) Text("Saving photo…",style=MaterialTheme.typography.labelSmall)
-                    if(photos.canRetry) TextButton(onClick=photos::retry) { Text("Retry Save") }
+            if(granted && camera.ready && recovered && !finishing) {
+                if(photo) {
+                    PhotoControls(
+                        photos=photos,
+                        landscape=landscape,
+                        canCapture=granted && maySwitch && !camera.switching,
+                        onCapture=::takePhoto,
+                        leading={ MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
+                        modeSelector=modeSelector,
+                        trailing={ LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) {
+                            selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear)
+                        } }
+                    )
                 } else {
                     RecordingControls(this@CameraScreen, recordingModel, orientation, previewRotation=camera.previewDisplayRotation, cameraGranted = granted && !camera.switching,
-                showShortcuts = true, verticalShutter = landscape,
+                showShortcuts = true, verticalShutter = landscape, modeSelector = modeSelector,
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
                 beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close();arrangement.invalidate() },
@@ -435,8 +444,10 @@ internal fun MainActivity.CameraScreen() {
                     }
                 })
                 }
-                if(camera.focus!=null) Text(camera.focusResult,style=MaterialTheme.typography.labelSmall)
-                camera.message?.let { Text(it,style=MaterialTheme.typography.labelSmall) }
+                Box(Modifier.fillMaxWidth().height(20.dp),contentAlignment=Alignment.Center) {
+                    val inline=camera.message ?: camera.focusResult.takeIf { camera.focus!=null }
+                    inline?.let { Text(it,style=MaterialTheme.typography.labelSmall,color=SkitCamColors.TextSecondary,maxLines=1) }
+                }
             }
         }
         if(quick && !editors) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp)) {
@@ -447,47 +458,29 @@ internal fun MainActivity.CameraScreen() {
             ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
         }
         if (trimming && snapshot.state == RecordingState.Paused) TrimScreen(trimModel, recordingModel, review)
-        if(!snapshot.openSession && landscape && !finishing && !settings && !quick && camera.ready) Row(Modifier.align(Alignment.BottomStart)
-            .fillMaxWidth().padding(end=(dockWidth+8.dp))
-            .background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.65f))))
-            .blockPreviewInput()
-            .safeDrawingPadding().padding(8.dp),horizontalArrangement=Arrangement.Center) {
-            listOf(CameraMode.Photo to "Photo",CameraMode.SkitVideo to "Skit Video").forEach { (mode,label) ->
-                FilterChip(selected=camera.choice.mode==mode,onClick={selectCamera(mode)},enabled=maySwitch,label={Text(label,maxLines=1)})
-                Spacer(Modifier.width(8.dp))
-            }
-        }
         if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
         SnackbarHost(snackbars,Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(
             end=if(landscape) dockWidth else 0.dp,
             bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp()+8.dp })) { data ->
-            Snackbar(data,containerColor=Color(0xFF292429),contentColor=Color.White,
-                actionColor=Color(0xFFFFBDC3),dismissActionContentColor=Color.LightGray)
+            Snackbar(data,containerColor=SkitCamColors.Surface,contentColor=SkitCamColors.TextPrimary,
+                actionColor=SkitCamColors.Warm,dismissActionContentColor=SkitCamColors.TextSecondary)
         }
-    }
-}
-
-/** Overlay gaps intercept camera gestures; child controls handle input first. */
-private fun Modifier.blockPreviewInput() = pointerInput(Unit) {
-    awaitPointerEventScope {
-        while(true) awaitPointerEvent(PointerEventPass.Final).changes.forEach { it.consume() }
     }
 }
 
 @Composable
-internal fun CameraMessage(message: String, action: String? = null, onAction: () -> Unit = {}) {
+internal fun CameraMessage(message: String, action: String? = null, title: String? = null, onAction: () -> Unit = {}) {
     val windowSize = LocalWindowInfo.current.containerSize
     val landscape = windowSize.width > windowSize.height
-    Box(Modifier.fillMaxSize().safeDrawingPadding().padding(
-        start = 32.dp, end = if (landscape) (if(LocalDensity.current.fontScale>1.5f) 192.dp else 152.dp) else 32.dp,
-        top = if (landscape) 88.dp else 150.dp, bottom = if (landscape) 32.dp else 150.dp),
-        contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(message, color = Color.White, textAlign = TextAlign.Center)
-            if (action != null) Button(onClick = onAction) { Text(action) }
-        }
-    }
+    SkitCamMessagePanel(
+        title = title ?: stringResource(R.string.app_name),
+        message = message,
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(
+            start = 32.dp, end = if (landscape) (if(LocalDensity.current.fontScale>1.5f) 192.dp else 152.dp) else 32.dp,
+            top = if (landscape) 88.dp else 150.dp, bottom = if (landscape) 32.dp else 150.dp),
+        primaryLabel = action,
+        onPrimary = if (action != null) onAction else null
+    )
 }
 
 private fun grantedPhotoPermission(context: Context) = ContextCompat.checkSelfPermission(context,Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED

@@ -1,8 +1,10 @@
 # SkitCam UI transformation plan
 
-Status: **proposed, not implemented**. Baseline: `main` at `4013175`, clean tree.
-Work should happen on a new branch (for example `feat/ui-foundation`) so the
-deployment history stays intact.
+Status: **Phase 1 implemented in Milestone 12C** on
+`feature/m12c-ui-transformation`, based on `main` at `a7264ae` (0.13.0 / 17).
+The original plan baseline (`4013175`, about 0.11.2) was reconciled with M11,
+M12A, M12B and the 0.13.0 release before implementation. See
+`VALIDATION_M12C.md` for evidence, device results and media preservation.
 
 ## Goal
 
@@ -49,7 +51,7 @@ flows, and the media-preservation tests.
 
 ## Phase 1 (proposed first slice): foundation and camera shell
 
-### 1a. Design foundation
+### 1a. Design foundation — **completed in M12C**
 
 - Add `ui/theme/SkitCamTheme.kt` with semantic colours, typography, spacing,
   shapes, and scrim levels. Replace the repeated literals `#101014`, `#18181D`,
@@ -61,7 +63,7 @@ flows, and the media-preservation tests.
 - Derive the displayed version from `BuildConfig` (enable `buildFeatures.buildConfig`).
 - Move camera-shell copy and accessibility descriptions into `strings.xml`.
 
-### 1b. Camera shell
+### 1b. Camera shell — **completed in M12C**
 
 - Split `MainActivity.CameraScreen` into presentation components only:
   `CameraHeader`, `CaptureDock`, `PhotoControls`, `VideoControls`, `CameraStatus`,
@@ -86,7 +88,12 @@ flows, and the media-preservation tests.
 - Rename **Full** → **Full screen**, with a one-time explanation that it crops the sensor to the display.
 - Polite live-region announcements for countdown, photo save, recording transitions, and failures.
 
-### 1c. Permission UX
+**M12C implementation note:** the two-chip mode selector was replaced by a single
+coin-flip toggle that displays the mode you can switch to (“Video” in Photo,
+“Photo” in Video). It sits immediately beside the shutter, so the shutter and mode
+control keep the same bounds in both modes and during recording locks.
+
+### 1c. Permission UX — **completed in M12C**
 
 - Brief in-app rationale before the first camera system prompt.
 - Microphone rationale stating that audio is required for Video only.
@@ -94,7 +101,7 @@ flows, and the media-preservation tests.
 - Explain notification permission before the finishing flow requests it; handle denial visibly.
 - Consistent permanently-denied recovery with Open settings.
 
-### 1d. Explicitly out of scope for Phase 1
+### 1d. Explicitly out of scope for Phase 1 — **still deferred**
 
 - Completed-project editing and versioned re-export.
 - Multiple drafts or projects; Library Media/Projects redesign.
@@ -103,7 +110,7 @@ flows, and the media-preservation tests.
 - Navigation Compose migration (the current activity/overlay model is adequate).
 - Play assets, signing, privacy policy, Data Safety, and full localisation or RTL sign-off.
 
-### 1e. Test and verification plan
+### 1e. Test and verification plan — **offline complete; guided device matrix partially complete**
 
 - Instrumentation tests that match visible text will need updated expectations
   wherever copy changes. Keep those edits minimal and map each one to its old label.
@@ -115,11 +122,12 @@ flows, and the media-preservation tests.
   ```
 
 - Do not add a Compose UI-test dependency without confirming network access.
-- Device or emulator validation (later): camera permission flows, Photo and Video
-  capture, Quick controls, orientation behaviour, pinned controls at 200% system font,
-  TalkBack traversal of the modal, and the existing hardware suites.
+- Device validation completed in M12C: camera permission flows, Photo and Video
+  capture, Quick controls, pinned controls at 200% system font, recording/export,
+  shelf/loop, arrangement, trim and the existing hardware suites. Full guided
+  physical rotation and TalkBack traversal remain for a follow-up session.
 
-## Later phases (not yet scheduled)
+## Later phases (not yet scheduled; M12C did not start these)
 
 - **Phase 2 — Editing and session flow:** single full-screen clip editor with a
   consistent draft/save model, unsaved-change confirmation, Include/Exclude with undo,

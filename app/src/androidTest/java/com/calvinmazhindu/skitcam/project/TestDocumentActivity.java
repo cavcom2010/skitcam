@@ -9,7 +9,7 @@ import android.os.Bundle;
 public final class TestDocumentActivity extends Activity {
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        if (!getPackageName().endsWith(".m11validation.test")) { finish(); return; }
+        if (!getPackageName().endsWith(".m12cvalidation.test") || getPackageName().endsWith(".m11validation.test")) { finish(); return; }
         if (saved == null) startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE).setType("application/zip")
             .putExtra(Intent.EXTRA_TITLE, getIntent().getStringExtra("filename"))

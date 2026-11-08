@@ -34,7 +34,7 @@ class GalleryDeviceTest {
     }
     @Test fun olderVideoCanBeSelectedPlayedAndReturnedToBrowser() {
         val context=inst.targetContext
-        check(context.packageName.endsWith(".m12bvalidation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m11validation"))))
+        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation"))))
         val entries=SavedMediaStore(context).read()
         val videos=SavedMediaPolicy.visible(entries,GalleryFilter.Videos)
         assertTrue("Record at least two dedicated validation exports before running",videos.size>=2)

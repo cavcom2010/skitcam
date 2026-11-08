@@ -50,8 +50,9 @@ class SavedMediaActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme(colorScheme=darkColorScheme(primary=Color(0xFFDAA0A4))) {
-                Surface(Modifier.fillMaxSize(),color=Color(0xFF101014),contentColor=Color.White) { Gallery() }
+            com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme {
+                Surface(Modifier.fillMaxSize(),color=com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.Ink,
+                    contentColor=com.calvinmazhindu.skitcam.ui.theme.SkitCamColors.TextPrimary) { Gallery() }
             }
         }
     }
