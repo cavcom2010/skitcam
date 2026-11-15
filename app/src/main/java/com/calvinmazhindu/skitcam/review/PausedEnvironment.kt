@@ -44,6 +44,8 @@ import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
 import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.trim.TrimRange
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
+import com.calvinmazhindu.skitcam.ui.components.SegmentStatusMark
+import com.calvinmazhindu.skitcam.ui.components.segmentStatusColor
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.video.ImmersiveVideoScaffold
 import com.calvinmazhindu.skitcam.ui.video.VideoScreenHeader
@@ -62,6 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
+import kotlin.math.abs
 
 @Composable
 fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingViewModel,
@@ -168,8 +171,6 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     }
 }
 
-private fun segmentStatusColor(kept: Boolean) = if (kept) SkitCamColors.Success else SkitCamColors.Error
-
 @Composable
 private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: ThumbnailLoader,
     enabled: Boolean, saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
@@ -203,6 +204,7 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
                         ThumbnailResult.Loading -> Text("…", color = Color.White)
                         ThumbnailResult.Unavailable -> Text("Unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
+                    SegmentStatusMark(segment.kept, Modifier.align(Alignment.TopEnd))
                 }
                 Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}", style = MaterialTheme.typography.labelSmall)
             }
@@ -244,6 +246,15 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     val range = trim.draft
     val frameStepMs = remember(segment.id) { frameStepMs(segment.media?.averageFps) }
     var confirmAction by remember(segment.id) { mutableStateOf<(() -> Unit)?>(null) }
+    // Absolute source position to restore after the clipped preview is rebuilt.
+    var pendingSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
+    // Keeps the marker steady while ExoPlayer applies a pending seek.
+    var heldSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
+    fun noteSourcePosition(range: TrimRange) {
+        val playerPosition = review.player?.currentPosition ?: 0L
+        pendingSourcePosition = (range.trimStartMs + playerPosition)
+            .coerceIn(range.trimStartMs, range.trimEndMs)
+    }
     val closeReview = {
         trim.close()
         review.close()
@@ -289,7 +300,22 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     }
     LaunchedEffect(trim.revision, trim.ready) {
         val current = trim.draft
-        if (trim.ready && current?.valid() == true) review.clip(segment, current)
+        if (trim.ready && current?.valid() == true) {
+            val target = pendingSourcePosition
+            pendingSourcePosition = null
+            review.clip(segment, current, target)
+            if (target != null) {
+                heldSourcePosition = target.coerceIn(current.trimStartMs, current.trimEndMs)
+            }
+        }
+    }
+    LaunchedEffect(playback.positionMs, review.player?.playbackState, trim.draft) {
+        val held = heldSourcePosition ?: return@LaunchedEffect
+        val current = trim.draft ?: return@LaunchedEffect
+        val player = review.player ?: return@LaunchedEffect
+        if (player.playbackState !in setOf(Player.STATE_READY, Player.STATE_ENDED)) return@LaunchedEffect
+        val expected = (held - current.trimStartMs).coerceIn(0L, current.effectiveDurationMs)
+        if (abs(player.currentPosition - expected) <= 120L) heldSourcePosition = null
     }
     BackHandler { navigate(closeReview) }
     @Composable
@@ -304,12 +330,20 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
         if (trim.saving) Text("Saving trim…", style = MaterialTheme.typography.labelSmall,
             color = SkitCamColors.TextSecondary)
     }
+    fun resetTrim() {
+        trim.draft?.let(::noteSourcePosition)
+        review.player?.pause()
+        trim.reset()
+    }
     @Composable
-    fun videoControls(modifier: Modifier = Modifier) {
+    fun videoControls(modifier: Modifier = Modifier, progressOnOwnRow: Boolean = false) {
         val activeRange = range?.takeIf { trim.ready }
-        val sourcePosition = if (activeRange != null) {
+        val calculatedSource = if (activeRange != null) {
             (activeRange.trimStartMs + playback.positionMs).coerceIn(0L, activeRange.sourceDurationMs)
         } else playback.positionMs
+        val sourcePosition = activeRange?.let { current ->
+            heldSourcePosition?.coerceIn(current.trimStartMs, current.trimEndMs)
+        } ?: calculatedSource
         val trimProgress: (@Composable (Modifier) -> Unit)? = if (activeRange != null) {
             { progressModifier ->
                 VideoTrimBar(
@@ -319,10 +353,17 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     trimEndMs = activeRange.trimEndMs,
                     enabled = !trim.saving && trim.error == null,
                     onSeek = { sourceMs ->
+                        heldSourcePosition = null
                         review.player?.seekTo((sourceMs - activeRange.trimStartMs).coerceAtLeast(0L))
                     },
-                    onTrimStart = { ms -> trim.change(activeRange.start(ms)) },
-                    onTrimEnd = { ms -> trim.change(activeRange.end(ms)) },
+                    onTrimStart = { ms ->
+                        noteSourcePosition(activeRange)
+                        trim.change(activeRange.start(ms))
+                    },
+                    onTrimEnd = { ms ->
+                        noteSourcePosition(activeRange)
+                        trim.change(activeRange.end(ms))
+                    },
                     frameStepMs = frameStepMs,
                     onDragStart = { review.player?.pause() },
                     onDragEnd = { trim.settled() },
@@ -336,8 +377,12 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             durationMs = activeRange?.sourceDurationMs ?: playback.durationMs,
             enabled = review.player != null && review.error == null,
             onPlayPause = ::togglePlayback,
-            onJumpToStart = { review.player?.seekTo(0) },
+            onJumpToStart = {
+                heldSourcePosition = null
+                review.player?.seekTo(0)
+            },
             onSeek = { sourceMs ->
+                heldSourcePosition = null
                 val current = trim.draft
                 if (current != null) review.player?.seekTo((sourceMs - current.trimStartMs).coerceAtLeast(0L))
                 else review.player?.seekTo(sourceMs)
@@ -345,6 +390,8 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             overlay = true,
             seekContentDescription = "Seek segment ${segment.order}",
             progressContent = trimProgress,
+            progressOnOwnRow = progressOnOwnRow,
+            showTime = false,
             modifier = modifier
         )
     }
@@ -380,7 +427,7 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                                 onPlayFrom = if (trim.dirty) null else onPlayFrom,
                                 showClose = false,
                                 onSaveTrim = { trim.saveInPlace(model) },
-                                onResetTrim = { review.player?.pause(); trim.reset() },
+                                onResetTrim = ::resetTrim,
                                 trimDirty = trim.dirty,
                                 trimSaving = trim.saving,
                                 trimCanSave = trim.canSave,
@@ -403,19 +450,25 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     subtitle = reviewSubtitle(segment),
                     onClose = { navigate(closeReview) }
                 )
-                VideoSurface(
-                    player = review.player,
-                    aspect = aspect,
-                    contentDescription = "Segment ${segment.order} playback",
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp)
-                ) { videoControls(Modifier.align(Alignment.BottomCenter)) }
+                // The fitted 9:16 frame is much narrower than the phone in portrait.
+                // Keep the preview aspect-fit, but let the trim/transport overlay span
+                // the full safe width so handles and the playhead stay easy to target.
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    VideoSurface(
+                        player = review.player,
+                        aspect = aspect,
+                        contentDescription = "Segment ${segment.order} playback",
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)
+                    )
+                    videoControls(Modifier.align(Alignment.BottomCenter), progressOnOwnRow = true)
+                }
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
                     trimMessages()
                     ReviewActions(session, segment, model, review, false,
                         onPlayFrom = if (trim.dirty) null else onPlayFrom,
                         showClose = false,
                         onSaveTrim = { trim.saveInPlace(model) },
-                        onResetTrim = { review.player?.pause(); trim.reset() },
+                        onResetTrim = ::resetTrim,
                         trimDirty = trim.dirty,
                         trimSaving = trim.saving,
                         trimCanSave = trim.canSave,
@@ -468,12 +521,13 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
     var actions by remember(segment.id) { mutableStateOf(false) }
     val disposition = if (segment.kept) "Kept" else "Discarded"
     val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
-    Box(modifier.then(if (selected) Modifier.border(2.dp, SkitCamColors.Warm,
-        MaterialTheme.shapes.small).padding(2.dp) else Modifier)) {
+    val shape = MaterialTheme.shapes.small
+    Box(modifier.then(if (selected) Modifier.background(SkitCamColors.Warm.copy(alpha = 0.12f), shape)
+        .border(2.dp, SkitCamColors.Warm, shape).padding(2.dp) else Modifier)) {
         Card(onClick = onOpen, enabled = !saving,
             border = BorderStroke(1.5.dp, segmentStatusColor(segment.kept)),
             modifier = Modifier.fillMaxWidth()
-                .then(if (row) Modifier.heightIn(min = 68.dp) else Modifier.fillMaxSize())
+                .then(if (row) Modifier.heightIn(min = 64.dp) else Modifier.fillMaxSize())
                 .clearAndSetSemantics {
                     contentDescription = "Review segment ${segment.order}, $disposition$availability"
                     this.selected = selected
@@ -493,7 +547,7 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
                     contentColor = Color.White)) {
             if (row) Row(Modifier.fillMaxWidth().padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ThumbnailFrame(thumbnail, Modifier.size(52.dp), dimmed = !segment.kept)
+                ThumbnailStatus(thumbnail, segment.kept, Modifier.size(48.dp))
                 Column(Modifier.weight(1f)) {
                     Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
                         style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -502,7 +556,7 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
             } else {
                 Column(Modifier.fillMaxSize().padding(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    ThumbnailFrame(thumbnail, Modifier.fillMaxWidth().height(48.dp), dimmed = !segment.kept)
+                    ThumbnailStatus(thumbnail, segment.kept, Modifier.fillMaxWidth().height(48.dp))
                     Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
                         style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -511,6 +565,14 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
         if (!row) Box(Modifier.align(Alignment.TopEnd)) {
             ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
         }
+    }
+}
+
+@Composable
+private fun ThumbnailStatus(thumbnail: ThumbnailResult, kept: Boolean, modifier: Modifier) {
+    Box(modifier) {
+        ThumbnailFrame(thumbnail, Modifier.fillMaxSize(), dimmed = !kept)
+        SegmentStatusMark(kept, Modifier.align(Alignment.TopEnd))
     }
 }
 

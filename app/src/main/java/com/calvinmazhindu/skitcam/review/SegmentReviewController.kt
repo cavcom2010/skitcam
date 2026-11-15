@@ -94,12 +94,20 @@ class SegmentReviewController(context: Context) {
             .setStartPositionMs(it.trimStartMs).setEndPositionMs(it.trimEndMs).build()) }
         return builder.build()
     }
-    fun clip(segment: Segment, range: TrimRange) {
+    /**
+     * Rebuilds the clipped preview while preserving an absolute source position.
+     * Without [sourcePositionMs], preview starts at the retained range's beginning.
+     */
+    fun clip(segment: Segment, range: TrimRange, sourcePositionMs: Long? = null) {
         if (!range.valid()) return
         player?.let {
+            val resumeAt = sourcePositionMs?.let { source ->
+                (source - range.trimStartMs).coerceIn(0L, range.effectiveDurationMs)
+            }
             it.pause()
             it.setMediaItem(item(File(segment.path), range))
             it.prepare()
+            if (resumeAt != null) it.seekTo(resumeAt)
         }
     }
     fun decide(model: RecordingViewModel, kept: Boolean) {

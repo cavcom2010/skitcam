@@ -178,8 +178,11 @@ class ReviewLayoutDeviceTest {
         await("thumbnail") {
             node { it.contentDescription?.startsWith("Review segment 1,") == true } != null
         }
+        screenshot("$label-paused-before-review")
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
-        await("review player ready", 60_000L) {
+        await("review player ready: selection=${main { review.selection }} " +
+            "trim=${main { activity.trimModel.ready }} error=${main { review.error ?: activity.trimModel.error }}",
+            60_000L) {
             main {
                 activity.trimModel.ready &&
                     review.player?.playbackState in setOf(Player.STATE_READY, Player.STATE_ENDED)
@@ -190,12 +193,14 @@ class ReviewLayoutDeviceTest {
             node { it.contentDescription?.toString() == "Pause" } != null
         }
         await("decoded frame") { main { review.player?.let { it.isPlaying && it.videoSize.width > 0 && it.currentPosition > 400 } == true } }
-        fun timeText(): String? = node { it.text?.toString()?.contains(" / ") == true }?.text?.toString()
-        val timeBefore = timeText()
+        val positionBefore = main { review.player?.currentPosition ?: 0L }
         Thread.sleep(600)
-        val timeAfter = timeText()
-        assertNotEquals("Playback time must advance while playing", timeBefore, timeAfter)
-        click { it.contentDescription?.toString() == "Pause" }
+        val positionAfter = main { review.player?.currentPosition ?: 0L }
+        assertTrue("Playback must advance while playing: $positionBefore -> $positionAfter",
+            positionAfter > positionBefore)
+        assertNull("Review trim keeps the transport timer out of the overlay",
+            node { it.contentDescription?.toString()?.startsWith("Playback time ") == true })
+        if (main { review.player?.isPlaying == true }) click { it.contentDescription?.toString() == "Pause" }
         await("play icon while paused") {
             main { review.player?.isPlaying == false } && node { it.contentDescription?.toString() == "Play" } != null
         }
@@ -236,14 +241,21 @@ class ReviewLayoutDeviceTest {
         assertTrue("Player must be inside the viewport: $player vs $viewport", viewport.contains(player))
         assertTrue("Rendered video must be inside the player: $rendered vs $player", player.contains(rendered))
 
+
         await("inline trim ready") { node { it.contentDescription?.toString() == "Trim timeline" } != null }
         val controls = JSONObject()
+        var trimTrack = Rect()
         for (track in listOf("Trim timeline", "Trim start handle", "Trim end handle")) {
             val item = node { it.contentDescription?.toString() == track }
             assertNotNull("Missing $track", item)
             val rect = Rect().also(item!!::getBoundsInScreen)
             assertTrue("$track outside viewport: $rect vs $viewport", viewport.contains(rect))
+            if (track == "Trim timeline") trimTrack = rect
             controls.put(track, JSONObject().put("bounds", rect.flattenToString()))
+        }
+        if (actualOrientation == "portrait") {
+            assertTrue("Portrait trim track must span the safe width: $trimTrack vs $viewport",
+                trimTrack.width() >= viewport.width() * 0.85f)
         }
         val expectedLabels = listOf("Discard", "Play from here", "Close")
         val rects = mutableMapOf<String, Rect>()
@@ -266,7 +278,9 @@ class ReviewLayoutDeviceTest {
         val viewportArea = viewport.width().toLong() * viewport.height()
         val videoArea = rendered.width().toLong() * rendered.height()
         val coverage = if (viewportArea > 0) videoArea.toDouble() / viewportArea else 0.0
+        val heightUse = if (viewport.height() > 0) rendered.height().toDouble() / viewport.height() else 0.0
         val density = context.resources.displayMetrics.density
+        val compact = viewport.width() / density < 400f || viewport.height() / density < 600f
         val report = JSONObject()
             .put("label", label)
             .put("orientation", actualOrientation)
@@ -283,6 +297,8 @@ class ReviewLayoutDeviceTest {
                 .put("width", rendered.width() / density).put("height", rendered.height() / density))
             .put("videoAspect", aspect)
             .put("videoAreaCoverage", coverage)
+            .put("videoHeightUse", heightUse)
+            .put("compactViewport", compact)
             .put("controls", controls)
 
         val directory = File(context.filesDir, "validation-m12c-review")
@@ -292,12 +308,18 @@ class ReviewLayoutDeviceTest {
         screenshot(stem)
 
         if (!baseline) {
+            // Aspect-fit in a narrow portrait viewport is width-limited, so area coverage
+            // falls naturally on compact phones. Height use proves the video still takes
+            // the space the immersive layout gives it.
             val minimumCoverage = when {
+                compact -> 0.18
                 actualOrientation == "portrait" -> if (fontScale > 1.45f) 0.45 else 0.55
                 else -> if (fontScale > 1.45f) 0.50 else 0.60
             }
             assertTrue("Video must use the review viewport: ${"%.3f".format(coverage)} < $minimumCoverage",
                 coverage >= minimumCoverage)
+            assertTrue("Video must use the available review height: ${"%.3f".format(heightUse)}",
+                heightUse >= 0.45)
         }
 
         main { review.close() }

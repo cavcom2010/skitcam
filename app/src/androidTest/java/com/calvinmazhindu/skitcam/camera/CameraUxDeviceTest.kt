@@ -260,6 +260,48 @@ class CameraUxDeviceTest {
         click("Stop recording");finished()
         shot("immersive-returned-portrait")
     }
+    @Test fun h_pausedFocusRingIsRetiredAndCountStaysClearOfDockControls() {
+        await("profile editable") { camera.video.canEdit() }
+        inst.runOnMainSync { camera.video.choose(com.calvinmazhindu.skitcam.video.VideoSettings()) }
+        await("default profile") { model.cameraReady && !camera.video.pending &&
+            camera.video.settings == com.calvinmazhindu.skitcam.video.VideoSettings() }
+        record()
+        fun preview(view: android.view.View): androidx.camera.view.PreviewView? {
+            if (view is androidx.camera.view.PreviewView) return view
+            if (view is android.view.ViewGroup) for (i in 0 until view.childCount) preview(view.getChildAt(i))?.let { return it }
+            return null
+        }
+        var view: androidx.camera.view.PreviewView? = null
+        inst.runOnMainSync { view = checkNotNull(preview(activity.window.decorView)) }
+        inst.runOnMainSync {
+            camera.focus(view!!, androidx.compose.ui.geometry.Offset(view!!.width / 2f, view!!.height / 2f))
+        }
+        await("focus ring visible") { camera.focus != null }
+        model.pause(); await("paused") { model.snapshots.value.state == RecordingState.Paused }
+        await("stale focus ring retired") { camera.focus == null }
+        fun boundsOf(label: String, prefix: Boolean = false,
+            clickable: Boolean = true): android.graphics.Rect {
+            var node: AccessibilityNodeInfo? = null
+            await("$label bounds") { node = find(label, prefix); node != null }
+            if (clickable) while (node?.isClickable != true && node?.parent != null) node = node?.parent
+            return android.graphics.Rect().apply { node!!.getBoundsInScreen(this) }
+        }
+        val count = boundsOf("Segment count.", prefix = true, clickable = false)
+        val resume = boundsOf("Resume recording")
+        val stop = boundsOf("Stop recording")
+        val mode = boundsOf("Photo")
+        assertFalse("Paused count overlaps RESUME: $count / $resume",
+            android.graphics.Rect.intersects(count, resume))
+        assertFalse("Paused count overlaps STOP: $count / $stop",
+            android.graphics.Rect.intersects(count, stop))
+        assertFalse("Mode coin overlaps RESUME: $mode / $resume",
+            android.graphics.Rect.intersects(mode, resume))
+        shot("paused-count-and-dock")
+        model.resume(0)
+        await("resumed") { model.snapshots.value.state == RecordingState.Recording &&
+            model.snapshots.value.activeDurationMs >= 1500 }
+        model.stop(); finished()
+    }
     @Test fun z_backgroundSaveCheckpoint() {
         // Next invocation force-stops only this validation package and runs recoveryCheckpoint.
         record();model.stop()

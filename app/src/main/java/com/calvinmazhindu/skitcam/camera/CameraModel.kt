@@ -131,6 +131,8 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         if (switching) { choice = committed; switching = false }
     }
     fun idle() { streaming = false; focusToken++; focus = null }
+    /** Hides only the transient focus ring; AF metering and its result are unchanged. */
+    fun clearFocusFeedback() { focus = null }
     /** Display-only change on the same binding. Keep zoom, EV, metering and AF hold. */
     fun rotated(sensorRotation: Int, displayRotation: Int) {
         videoAspect=boundInfo?.takeUnless { it.photo }?.let { ViewfinderGeometry.aspect(it.width,it.height,sensorRotation) }

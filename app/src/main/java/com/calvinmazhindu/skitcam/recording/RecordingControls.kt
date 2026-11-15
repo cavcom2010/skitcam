@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +85,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
+    val largeFont = LocalDensity.current.fontScale > 1.5f
     val desiredPose = snapshot.session?.takeIf { snapshot.openSession }?.orientationDegrees
     val poseCorrect = pose != null && (desiredPose == null || pose == desiredPose)
     val matchesPreview = CameraOrientationPolicy.matchesDisplay(pose,orientation.displayRotation) && previewRotation==orientation.displayRotation
@@ -125,14 +127,21 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
         val fresh = snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed)
-        Box(Modifier.fillMaxWidth().heightIn(min = 24.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center) {
             if (fresh) {
                 Text(readyToRecord, color = SkitCamColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
-                    textAlign = TextAlign.Center)
+                    textAlign = TextAlign.Center, maxLines = 1)
             } else {
                 val seconds=snapshot.durationMs/1000
+                val countLabel = "Segment count. %d kept".format(snapshot.count)
                 Text("%02d:%02d · %d kept".format(seconds/60,seconds%60,snapshot.count),color=SkitCamColors.TextPrimary,
-                    style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center)
+                    style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center,maxLines=1,
+                    overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier=Modifier.semantics {
+                        contentDescription=countLabel
+                        liveRegion=LiveRegionMode.Polite
+                    })
             }
         }
         @Composable fun Shutter(enabled: Boolean, label: String, icon: CameraIcon, onClick: ()->Unit) {
@@ -171,7 +180,13 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                         disabledContainerColor=SkitCamColors.SurfacePressed,
                         disabledContentColor=SkitCamColors.TextMuted
                     )
-                ) { Text("RESUME", style=MaterialTheme.typography.labelMedium, maxLines=1, textAlign=TextAlign.Center) }
+                ) {
+                    if (largeFont) CameraSymbol(CameraIcon.Play, Modifier.size(34.dp),
+                        if (canResume) Color.White else SkitCamColors.TextMuted)
+                    else Text("RESUME", style=MaterialTheme.typography.labelMedium, maxLines=1,
+                        softWrap=false, overflow=androidx.compose.ui.text.style.TextOverflow.Clip,
+                        textAlign=TextAlign.Center)
+                }
                 else -> CircularProgressIndicator(Modifier.size(36.dp).semantics {
                     contentDescription = when(snapshot.state) {
                         RecordingState.Starting -> startingCamera

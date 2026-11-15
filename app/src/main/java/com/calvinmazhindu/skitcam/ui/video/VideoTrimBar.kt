@@ -4,7 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -21,12 +20,16 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -35,6 +38,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlin.math.roundToLong
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 
@@ -75,22 +79,34 @@ fun VideoTrimBar(
         fun xDp(ms: Long) = (ms.toDouble() / source * width.value).toFloat().dp
         fun sourceAt(px: Float) = (px / widthPx * source).toLong().coerceIn(0L, source)
 
-        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(50))
-            .background(SkitCamColors.TextMuted.copy(alpha = 0.32f))) {
-            Canvas(Modifier.fillMaxSize()) {
-                val startX = x(start)
-                val endX = x(end)
-                drawRect(SkitCamColors.Warning.copy(alpha = 0.62f), size = Size(startX, size.height))
-                drawRect(SkitCamColors.Warning.copy(alpha = 0.62f), topLeft = Offset(endX, 0f),
-                    size = Size((size.width - endX).coerceAtLeast(0f), size.height))
-                drawRect(SkitCamColors.Success.copy(alpha = 0.62f), topLeft = Offset(startX, 0f),
-                    size = Size((endX - startX).coerceAtLeast(0f), size.height))
-                val playX = x(play)
-                drawLine(SkitCamColors.Warm, Offset(playX, 0f), Offset(playX, size.height), 3.dp.toPx())
-                drawGrip(startX, size.height)
-                drawGrip(endX, size.height)
-                drawCircle(SkitCamColors.Warm, 5.dp.toPx(), Offset(playX, size.height / 2f))
-                drawCircle(SkitCamColors.Ink, 1.5.dp.toPx(), Offset(playX, size.height / 2f))
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxWidth().height(30.dp).alpha(if (enabled) 1f else 0.55f)
+                .clip(RoundedCornerShape(9.dp))
+                .background(SkitCamColors.Ink.copy(alpha = 0.64f))) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val startX = x(start)
+                    val endX = x(end)
+                    // Neutral source, orange removed ranges and a green retained range.
+                    drawRect(SkitCamColors.TextMuted.copy(alpha = 0.20f), size = size)
+                    drawRect(SkitCamColors.Warning.copy(alpha = 0.58f), size = Size(startX, size.height))
+                    drawRect(SkitCamColors.Warning.copy(alpha = 0.58f), topLeft = Offset(endX, 0f),
+                        size = Size((size.width - endX).coerceAtLeast(0f), size.height))
+                    drawTrimHatch(0f, startX, size.height)
+                    drawTrimHatch(endX, size.width, size.height)
+                    drawRect(SkitCamColors.Success.copy(alpha = 0.62f), topLeft = Offset(startX, 0f),
+                        size = Size((endX - startX).coerceAtLeast(0f), size.height))
+                    drawRect(SkitCamColors.Success.copy(alpha = 0.9f), topLeft = Offset(startX, 0f),
+                        size = Size((endX - startX).coerceAtLeast(0f), size.height),
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                    // Each grip doubles as a one-frame nudge: the left grip points
+                    // right (trim inward), the right grip points left (trim inward).
+                    drawGrip(startX, size.height, pointsRight = true)
+                    drawGrip(endX, size.height, pointsRight = false)
+                    val playX = x(play)
+                    drawLine(SkitCamColors.Warm, Offset(playX, 0f), Offset(playX, size.height), 2.dp.toPx())
+                    drawCircle(SkitCamColors.Ink, 6.dp.toPx(), Offset(playX, size.height / 2f))
+                    drawCircle(SkitCamColors.Warm, 4.dp.toPx(), Offset(playX, size.height / 2f))
+                }
             }
         }
 
@@ -119,6 +135,7 @@ fun VideoTrimBar(
             enabled = enabled,
             description = "Trim start handle",
             frameStepMs = frameStepMs,
+            stepDirection = 1L,
             onChange = onTrimStart,
             onDragStart = onDragStart,
             onDragEnd = onDragEnd
@@ -131,6 +148,7 @@ fun VideoTrimBar(
             enabled = enabled,
             description = "Trim end handle",
             frameStepMs = frameStepMs,
+            stepDirection = -1L,
             onChange = onTrimEnd,
             onDragStart = onDragStart,
             onDragEnd = onDragEnd
@@ -148,24 +166,37 @@ internal fun snapToFrame(valueMs: Long, frameStepMs: Long): Long {
     return (valueMs.toDouble() / step).roundToLong() * step
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGrip(centerX: Float, height: Float) {
+private fun DrawScope.drawTrimHatch(left: Float, right: Float, height: Float) {
+    if (right <= left) return
+    val spacing = 9.dp.toPx()
+    var x = left - height
+    while (x < right) {
+        drawLine(SkitCamColors.Ink.copy(alpha = 0.16f), Offset(x, height), Offset(x + height, 0f),
+            1.dp.toPx())
+        x += spacing
+    }
+}
+
+private fun DrawScope.drawGrip(centerX: Float, height: Float, pointsRight: Boolean) {
     val barWidth = 14.dp.toPx()
-    val barHeight = height * 0.78f
+    val barHeight = height * 0.84f
     val top = (height - barHeight) / 2f
-    drawRoundRect(Color.White, topLeft = Offset(centerX - barWidth / 2f, top),
+    val cx = centerX.coerceIn(barWidth / 2f, (size.width - barWidth / 2f).coerceAtLeast(barWidth / 2f))
+    drawRoundRect(Color.Black.copy(alpha = 0.35f), topLeft = Offset(cx - barWidth / 2f - 1.dp.toPx(), top - 1.dp.toPx()),
+        size = Size(barWidth + 2.dp.toPx(), barHeight + 2.dp.toPx()),
+        cornerRadius = CornerRadius((barWidth + 2.dp.toPx()) / 2f))
+    drawRoundRect(Color.White, topLeft = Offset(cx - barWidth / 2f, top),
         size = Size(barWidth, barHeight), cornerRadius = CornerRadius(barWidth / 2f))
     val chevronY = height / 2f
     val chevronHeight = 3.dp.toPx()
-    val chevronWidth = 2.dp.toPx()
-    val stroke = 1.5.dp.toPx()
-    drawLine(SkitCamColors.Ink, Offset(centerX - 1.5.dp.toPx(), chevronY - chevronHeight),
-        Offset(centerX - 1.5.dp.toPx() - chevronWidth, chevronY), stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-    drawLine(SkitCamColors.Ink, Offset(centerX - 1.5.dp.toPx() - chevronWidth, chevronY),
-        Offset(centerX - 1.5.dp.toPx(), chevronY + chevronHeight), stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-    drawLine(SkitCamColors.Ink, Offset(centerX + 1.5.dp.toPx(), chevronY - chevronHeight),
-        Offset(centerX + 1.5.dp.toPx() + chevronWidth, chevronY), stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-    drawLine(SkitCamColors.Ink, Offset(centerX + 1.5.dp.toPx() + chevronWidth, chevronY),
-        Offset(centerX + 1.5.dp.toPx(), chevronY + chevronHeight), stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+    val chevronWidth = 2.5.dp.toPx()
+    val stroke = 1.6.dp.toPx()
+    val tip = cx + if (pointsRight) chevronWidth else -chevronWidth
+    val back = cx - if (pointsRight) chevronWidth else -chevronWidth
+    drawLine(SkitCamColors.Ink, Offset(back, chevronY - chevronHeight), Offset(tip, chevronY),
+        stroke, cap = StrokeCap.Round)
+    drawLine(SkitCamColors.Ink, Offset(tip, chevronY), Offset(back, chevronY + chevronHeight),
+        stroke, cap = StrokeCap.Round)
 }
 
 @Composable
@@ -177,6 +208,7 @@ private fun TrimEdgeHandle(
     enabled: Boolean,
     description: String,
     frameStepMs: Long,
+    stepDirection: Long,
     onChange: (Long) -> Unit,
     onDragStart: () -> Unit,
     onDragEnd: () -> Unit
@@ -195,31 +227,58 @@ private fun TrimEdgeHandle(
         Modifier.offset(x = offset).width(48.dp).fillMaxHeight()
             .semantics {
                 contentDescription = description
-                stateDescription = formatPreciseTime(latestValue)
+                stateDescription = "${formatPreciseTime(latestValue)}. Tap to step " +
+                    "${if (stepDirection > 0) "later" else "earlier"} one frame; drag to adjust."
                 customActions = listOf(
                     CustomAccessibilityAction("Move earlier one frame") {
                         latestChange((latestValue - latestFrame).coerceAtLeast(0)); latestEnd(); true
                     },
                     CustomAccessibilityAction("Move later one frame") {
-                        latestChange(latestValue + latestFrame); latestEnd(); true
+                        latestChange((latestValue + latestFrame).coerceIn(0L, latestSpan)); latestEnd(); true
                     }
                 )
             }
-            .pointerInput(enabled, description) {
-                if (enabled) detectDragGestures(
-                    onDragStart = { base = latestValue; accumulated = 0f; latestStart() },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        accumulated += amount.x
-                        if (latestWidth > 0f) {
-                            val delta = (accumulated / latestWidth * latestSpan).toLong()
-                            val raw = (base + delta).coerceIn(0L, latestSpan)
-                            latestChange(snapToFrame(raw, latestFrame).coerceIn(0L, latestSpan))
+            .pointerInput(enabled, description, stepDirection) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    down.consume()
+                    var dragging = false
+                    var total = 0f
+                    var lastX = down.position.x
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) { change.consume(); break }
+                        val dx = change.position.x - lastX
+                        lastX = change.position.x
+                        total += dx
+                        if (!dragging && abs(total) > viewConfiguration.touchSlop) {
+                            dragging = true
+                            base = latestValue
+                            accumulated = 0f
+                            latestStart()
+                        } else if (dragging) {
+                            accumulated += dx
+                            if (latestWidth > 0f) {
+                                val delta = (accumulated / latestWidth * latestSpan).toLong()
+                                val raw = (base + delta).coerceIn(0L, latestSpan)
+                                latestChange(snapToFrame(raw, latestFrame).coerceIn(0L, latestSpan))
+                            }
                         }
-                    },
-                    onDragEnd = { latestEnd() },
-                    onDragCancel = { latestEnd() }
-                )
+                        change.consume()
+                    }
+                    if (dragging) {
+                        latestEnd()
+                    } else {
+                        // Tapping is an edit: pause before capturing the playhead, then
+                        // step only the selected boundary.
+                        latestStart()
+                        val stepped = (latestValue + stepDirection * latestFrame).coerceIn(0L, latestSpan)
+                        if (stepped != latestValue) latestChange(stepped)
+                        latestEnd()
+                    }
+                }
             }
     )
 }

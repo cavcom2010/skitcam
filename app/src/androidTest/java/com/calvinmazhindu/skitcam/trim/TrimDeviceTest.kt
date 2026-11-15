@@ -23,6 +23,7 @@ import org.junit.runners.MethodSorters
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
 
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -126,6 +127,19 @@ class TrimDeviceTest {
         await(description) { node { it.contentDescription?.toString() == description } != null }
         return Rect().apply { node { it.contentDescription?.toString() == description }!!.getBoundsInScreen(this) }
     }
+    private fun tap(target: Rect) {
+        val down = SystemClock.uptimeMillis()
+        fun event(action: Int) {
+            val input = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action,
+                target.exactCenterX(), target.exactCenterY(), 0)
+            input.source = InputDevice.SOURCE_TOUCHSCREEN
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(input, true))
+            input.recycle()
+        }
+        event(MotionEvent.ACTION_DOWN)
+        Thread.sleep(50)
+        event(MotionEvent.ACTION_UP)
+    }
     private fun drag(from: Rect, toX: Float, toY: Float, holdAtEnd: Long = 0) {
         val down = SystemClock.uptimeMillis()
         fun event(action: Int, x: Float, y: Float) {
@@ -176,6 +190,22 @@ class TrimDeviceTest {
         val original = model.snapshots.value.session!!
         val hashes = original.segments.associate { it.id to digest(it.path) }
         openTrim(1)
+        val beforeStep = main { trim.draft!! }
+        tap(bounds("Trim start handle"))
+        await("start handle steps forward one frame") {
+            main { trim.draft!!.trimStartMs > beforeStep.trimStartMs }
+        }
+        val afterStart = main { trim.draft!! }
+        assertTrue("Start must step inward by one frame: ${afterStart.trimStartMs}",
+            afterStart.trimStartMs - beforeStep.trimStartMs in 1..100)
+        tap(bounds("Trim end handle"))
+        await("end handle steps backward one frame") {
+            main { trim.draft!!.trimEndMs < afterStart.trimEndMs }
+        }
+        val afterEnd = main { trim.draft!! }
+        assertTrue("End must step inward by one frame: ${afterEnd.trimEndMs}",
+            afterStart.trimEndMs - afterEnd.trimEndMs in 1..100)
+        screenshot("portrait-trim-handle-step")
         dragBoundary(true, 0.2f); dragBoundary(false, 0.8f)
         val chosen = main { trim.draft!! }
         assertTrue("End handle did not move: $chosen", chosen.trimEndMs < chosen.sourceDurationMs)
@@ -264,6 +294,56 @@ class TrimDeviceTest {
         text("Close"); text("Discard")
         await("closed") { main { review.selection == null && trim.segment == null } }
         assertEquals(before, metadata())
+        model.stop(); state(RecordingState.Completed)
+    }
+    @Test fun d_discardRestoreAndDirtyDraftNeverSilentlySaveTrim() {
+        record(2)
+        val before = model.snapshots.value.session!!.segments[0]
+        openTrim(1)
+        main { trim.change(trim.draft!!.start(250)); trim.settled() }
+        val draft = main { trim.draft!! }
+        assertTrue(main { trim.dirty })
+        assertNull("Play from here stays hidden", node { it.text?.toString() == "Play from here" })
+        text("Discard"); await("segment discarded") { model.snapshots.value.count == 1 }
+        assertFalse(model.snapshots.value.session!!.segments[0].kept)
+        assertEquals("Discard must not save the draft trim", before.trim,
+            model.snapshots.value.session!!.segments[0].trim)
+        assertEquals("Draft survives a status change", draft, main { trim.draft })
+        assertTrue("Draft remains dirty", main { trim.dirty })
+        text("Restore"); await("segment restored") { model.snapshots.value.count == 2 }
+        assertEquals(before.trim, model.snapshots.value.session!!.segments[0].trim)
+        assertEquals(draft, main { trim.draft })
+        text("Close")
+        await("dirty prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Keep editing"); await("still open") { main { review.selection != null } }
+        assertEquals(before.trim, model.snapshots.value.session!!.segments[0].trim)
+        text("Close"); text("Discard")
+        await("closed without saving") { main { review.selection == null && trim.segment == null } }
+        assertEquals(before.trim, model.snapshots.value.session!!.segments[0].trim)
+        model.stop(); state(RecordingState.Completed)
+    }
+    @Test fun e_handleEditsPreservePlayhead() {
+        record(1)
+        openTrim(1)
+        fun sourcePosition(): Long = main {
+            trim.draft!!.trimStartMs + review.player!!.currentPosition
+        }
+        main { review.player!!.seekTo(900) }
+        await("mid-clip playhead") { main { review.player!!.currentPosition >= 850 } }
+        val before = sourcePosition()
+        tap(bounds("Trim start handle"))
+        await("start stepped") { main { trim.draft!!.trimStartMs > 0 } }
+        await("playhead held after start step") { abs(sourcePosition() - before) <= 120L }
+        screenshot("playhead-preserved-start")
+        val afterStart = sourcePosition()
+        tap(bounds("Trim end handle"))
+        await("end stepped") { main { trim.draft!!.trimEndMs < trim.draft!!.sourceDurationMs } }
+        await("playhead held after end step") { abs(sourcePosition() - afterStart) <= 120L }
+        text("Reset trim")
+        await("reset to full source") { main { !trim.draft!!.isTrimmed } }
+        await("playhead held after reset") { abs(sourcePosition() - afterStart) <= 120L }
+        screenshot("playhead-preserved-reset")
+        main { trim.close(); review.close() }
         model.stop(); state(RecordingState.Completed)
     }
     @Test fun z_restartFixture() {

@@ -144,6 +144,7 @@ fun CameraModeToggle(
     )
     val showPhotoFace = flip > 90f
     val density = androidx.compose.ui.platform.LocalDensity.current
+    val showLabel = density.fontScale <= 1.5f
     val photoLabel = stringResource(R.string.mode_photo)
     val videoLabel = stringResource(R.string.mode_video_short)
     val toggleHint = stringResource(R.string.mode_toggle_hint)
@@ -166,7 +167,7 @@ fun CameraModeToggle(
     ) {
         Box(contentAlignment = Alignment.Center) {
             ModeCoinFace(
-                label = videoLabel,
+                label = if (showLabel) videoLabel else null,
                 icon = CameraIcon.Record,
                 modifier = Modifier.graphicsLayer {
                     rotationY = 0f
@@ -174,7 +175,7 @@ fun CameraModeToggle(
                 }.clearAndSetSemantics {}
             )
             ModeCoinFace(
-                label = photoLabel,
+                label = if (showLabel) photoLabel else null,
                 icon = CameraIcon.Photo,
                 modifier = Modifier.graphicsLayer {
                     rotationY = 180f
@@ -186,11 +187,14 @@ fun CameraModeToggle(
 }
 
 @Composable
-private fun ModeCoinFace(label: String, icon: CameraIcon, modifier: Modifier = Modifier) {
+private fun ModeCoinFace(label: String?, icon: CameraIcon, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        CameraSymbol(icon, Modifier.size(24.dp), SkitCamColors.Warm)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = SkitCamColors.TextPrimary, maxLines = 1)
+        CameraSymbol(icon, Modifier.size(if (label == null) 30.dp else 24.dp), SkitCamColors.Warm)
+        if (label != null) {
+            Text(label, style = MaterialTheme.typography.labelSmall, color = SkitCamColors.TextPrimary,
+                maxLines = 1)
+        }
     }
 }
 

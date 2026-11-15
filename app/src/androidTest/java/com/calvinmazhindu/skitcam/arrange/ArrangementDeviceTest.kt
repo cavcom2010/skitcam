@@ -171,6 +171,18 @@ class ArrangementDeviceTest {
         val original = model.snapshots.value.session!!
         val originalText = metadata()
         arrange()
+        val density = context.resources.displayMetrics.density
+        val firstRow = bounds("Drag segment 1")
+        val secondRow = bounds("Drag segment 2")
+        val pitch = secondRow.top - firstRow.top
+        assertTrue("Compact Arrange card pitch too tall: $pitch px",
+            pitch <= (76 * density).toInt())
+        for (label in listOf("Preview segment 1", "Move segment 1 down")) {
+            val target = bounds(label)
+            assertTrue("$label target is not 48 dp: $target",
+                target.width() >= (48 * density).toInt() - 2 &&
+                    target.height() >= (48 * density).toInt() - 2)
+        }
         val first = bounds("Drag segment 1"); val third = bounds("Drag segment 3")
         drag(first, third.exactCenterX(), third.exactCenterY() + 30)
         val moved = main { editor.draft!!.ids }
@@ -240,10 +252,18 @@ class ArrangementDeviceTest {
         text("Done"); await("saved") { main { editor.draft == null } }
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
         text("Discard"); await("discard") { model.snapshots.value.count == 2 }
+        await("discarded UI") {
+            node { it.contentDescription?.toString()?.startsWith("Review segment 1, Discarded") == true } != null
+        }
+        screenshot("portrait-discarded-status")
         text("Close")
         assertEquals(arranged - original.segments[0].id, model.snapshots.value.session!!.playbackOrder)
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
         text("Restore"); await("restored") { model.snapshots.value.count == 3 }
+        await("restored UI") {
+            node { it.contentDescription?.toString()?.startsWith("Review segment 1, Kept") == true } != null
+        }
+        screenshot("portrait-kept-status")
         text("Close")
         assertEquals((arranged - original.segments[0].id) + original.segments[0].id,
             model.snapshots.value.session!!.playbackOrder)

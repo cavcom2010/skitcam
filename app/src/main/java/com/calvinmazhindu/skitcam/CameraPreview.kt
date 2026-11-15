@@ -33,6 +33,7 @@ import androidx.lifecycle.Observer
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.photo.PhotoModel
 import com.calvinmazhindu.skitcam.photo.PhotoAspectRatio
@@ -75,6 +76,13 @@ private fun CameraPreviewContent(model: RecordingViewModel, cameraModel: CameraM
     val lifecycleOwner = LocalLifecycleOwner.current
     val choice = cameraModel.choice
     val photo = choice.mode == CameraMode.Photo
+    val recordingState by model.snapshots.collectAsStateWithLifecycle()
+    // The focus ring belongs to the live-camera surface. A revoked/paused session
+    // shows the segment shelf and count over the same pixels, so retire the stale
+    // ring instead of letting it sit beneath that text. Metering itself is untouched.
+    LaunchedEffect(recordingState.state) {
+        if (recordingState.state == RecordingState.Paused) cameraModel.clearFocusFeedback()
+    }
     val window = LocalWindowInfo.current.containerSize
     val landscape = window.width > window.height
     // A new view per idle binding choice prevents accepting the previous stream's cached STREAMING event.

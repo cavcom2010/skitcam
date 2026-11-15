@@ -204,14 +204,16 @@ class UnifiedVideoLayoutDeviceTest {
         assertTrue("$screen aspect ${rendered.width()}/${rendered.height()}",
             kotlin.math.abs(rendered.width().toDouble() / rendered.height() - aspect) < 0.02)
         val coverage = rendered.width().toDouble() * rendered.height() / (viewport.width() * viewport.height())
+        val density = context.resources.displayMetrics.density
+        val compact = viewport.width() / density < 400f || viewport.height() / density < 600f
         val minimum = when {
+            compact -> if (screen == "trim") 0.15 else 0.18
             fontScale > 1.45f -> if (screen == "trim") 0.22 else 0.28
             screen == "review" -> if (orientation == "portrait") 0.55 else 0.60
             screen == "trim" -> 0.30
             else -> 0.35
         }
         assertTrue("$screen coverage $coverage < $minimum", coverage >= minimum)
-        val density = context.resources.displayMetrics.density
         return JSONObject()
             .put("screen", screen)
             .put("orientation", orientation)
@@ -226,6 +228,7 @@ class UnifiedVideoLayoutDeviceTest {
                 .put("height", rendered.height() / density))
             .put("videoAspect", aspect)
             .put("videoAreaCoverage", coverage)
+            .put("compactViewport", compact)
     }
     private fun scrollableNode(): AccessibilityNodeInfo? {
         fun find(current: AccessibilityNodeInfo): AccessibilityNodeInfo? {
@@ -342,7 +345,9 @@ class UnifiedVideoLayoutDeviceTest {
         await("review closed by back") {
             main { review.selection == null && review.player == null && trim.segment == null }
         }
-        await("paused controls after review") { node { it.text?.toString() == "RESUME" } != null }
+        await("paused controls after review") {
+            node { it.contentDescription?.toString() == "Resume recording" } != null
+        }
 
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
         await("review before play") {
@@ -354,7 +359,9 @@ class UnifiedVideoLayoutDeviceTest {
         await("playback closed by back") {
             main { !activity.playback.active && activity.playback.player == null }
         }
-        await("paused controls after playback") { node { it.text?.toString() == "RESUME" } != null }
+        await("paused controls after playback") {
+            node { it.contentDescription?.toString() == "Resume recording" } != null
+        }
 
         model.stop()
         await("completed") { model.snapshots.value.state == RecordingState.Completed }

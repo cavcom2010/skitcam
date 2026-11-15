@@ -2,6 +2,15 @@
 
 A native Android photo and segment-video camera built with Kotlin, Jetpack Compose and CameraX.
 
+Milestone 12F polishes the existing review UI: the paused count and circular
+controls no longer collide, Arrange cards are compact, kept/discarded status uses
+green/orange with check/minus cues, selection has its own outline, and the
+portrait trim track spans the safe screen width with tap-to-step frame arrows.
+Handle edits keep the playhead at the same source time (clamped only when it
+falls outside the new green range). Review no longer shows a transport timer;
+Play skit keeps its timer. See
+[VALIDATION_M12F.md](VALIDATION_M12F.md).
+
 Version **0.13.0** completes Milestone 12B with faster verified video saving.
 Eligible untrimmed clips now use gated direct copy or video passthrough instead
 of re-encoding the video, while the existing Media3 renderer remains the safe

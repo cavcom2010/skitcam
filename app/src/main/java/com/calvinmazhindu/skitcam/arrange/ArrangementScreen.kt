@@ -2,6 +2,7 @@ package com.calvinmazhindu.skitcam.arrange
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.background
@@ -9,10 +10,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -24,8 +27,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.calvinmazhindu.skitcam.camera.CameraIcon
+import com.calvinmazhindu.skitcam.camera.CameraSymbol
 import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.review.*
+import com.calvinmazhindu.skitcam.ui.components.SegmentStatusMark
+import com.calvinmazhindu.skitcam.ui.components.segmentStatusColor
+import com.calvinmazhindu.skitcam.ui.video.formatClipDuration
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 
@@ -172,38 +180,53 @@ private fun ArrangementRow(segment: Segment, index: Int, count: Int, wide: Boole
     interactive: Boolean, loader: ThumbnailLoader, modifier: Modifier, handle: Modifier, onPreview: () -> Unit,
     onMove: (Int) -> Unit) {
     val thumbnail by produceState<ThumbnailResult>(ThumbnailResult.Loading, segment.id) { value = loader.load(segment) }
+    val status = segmentStatusColor(segment.kept)
+    val shape = RoundedCornerShape(8.dp)
     Surface(modifier.fillMaxWidth(), color = if (dragging) Color(0xFF49313A) else Color(0xFF25252B),
         contentColor = Color.White, shape = MaterialTheme.shapes.small) {
-        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                    when (val frame = thumbnail) {
-                        is ThumbnailResult.Ready -> Image(frame.bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                        ThumbnailResult.Loading -> Text("…")
-                        ThumbnailResult.Unavailable -> Text("Unavailable", style = MaterialTheme.typography.labelSmall)
-                    }
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.size(44.dp).clip(shape).border(1.5.dp, status, shape),
+                contentAlignment = Alignment.Center) {
+                when (val frame = thumbnail) {
+                    is ThumbnailResult.Ready -> Image(frame.bitmap.asImageBitmap(), null,
+                        Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    ThumbnailResult.Loading -> Text("…")
+                    ThumbnailResult.Unavailable -> Text("Unavailable", style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1)
                 }
-                Column(Modifier.weight(1f)) {
-                    Text("${index + 1}. Segment ${segment.order}", style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                    Text("%02d:%02d".format(segment.displayDurationMs / 60000, segment.displayDurationMs / 1000 % 60), style = MaterialTheme.typography.bodySmall)
-                }
-                if (wide) RowActions(segment, index, count, interactive, onPreview, onMove)
-                Box(handle, contentAlignment = Alignment.Center) { Text("≡", style = MaterialTheme.typography.headlineMedium) }
+                SegmentStatusMark(segment.kept, Modifier.align(Alignment.TopEnd).padding(2.dp))
             }
-            if (!wide) Row(Modifier.align(Alignment.End)) { RowActions(segment, index, count, interactive, onPreview, onMove) }
+            Column(Modifier.weight(1f).padding(horizontal = 2.dp)) {
+                Text("${index + 1}. Segment ${segment.order}", style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                Text(formatClipDuration(segment.displayDurationMs), style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFBEB9B5), maxLines = 1)
+            }
+            if (wide) {
+                TextButton(onClick = onPreview, enabled = interactive, modifier = Modifier.heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Preview segment ${segment.order}" }) {
+                    Text("Preview", color = Color(0xFFF2D4BC))
+                }
+            } else {
+                IconButton(onClick = onPreview, enabled = interactive,
+                    modifier = Modifier.size(48.dp).semantics { contentDescription = "Preview segment ${segment.order}" }) {
+                    CameraSymbol(CameraIcon.Play, Modifier.size(20.dp),
+                        Color(0xFFF2D4BC).copy(alpha = if (interactive) 1f else 0.3f))
+                }
+            }
+            IconButton(onClick = { onMove(index - 1) }, enabled = interactive && index > 0,
+                modifier = Modifier.size(48.dp).semantics { contentDescription = "Move segment ${segment.order} up" }) {
+                Text("↑", color = Color.White.copy(alpha = if (interactive && index > 0) 1f else 0.3f))
+            }
+            IconButton(onClick = { onMove(index + 1) }, enabled = interactive && index < count - 1,
+                modifier = Modifier.size(48.dp).semantics { contentDescription = "Move segment ${segment.order} down" }) {
+                Text("↓", color = Color.White.copy(alpha = if (interactive && index < count - 1) 1f else 0.3f))
+            }
+            Box(handle, contentAlignment = Alignment.Center) {
+                Text("≡", style = MaterialTheme.typography.titleLarge, color = Color(0xFFBEB9B5))
+            }
         }
     }
-}
-
-@Composable
-private fun RowActions(segment: Segment, index: Int, count: Int, interactive: Boolean,
-    onPreview: () -> Unit, onMove: (Int) -> Unit) {
-    TextButton(onClick = onPreview, enabled = interactive, modifier = Modifier.heightIn(min = 48.dp)
-        .semantics { contentDescription = "Preview segment ${segment.order}" }) { Text("Preview", color = Color(0xFFF2D4BC).copy(alpha = if (interactive) 1f else 0.3f)) }
-    IconButton(onClick = { onMove(index - 1) }, enabled = interactive && index > 0,
-        modifier = Modifier.size(48.dp).semantics { contentDescription = "Move segment ${segment.order} up" }) { Text("↑", color = Color.White.copy(alpha = if (interactive && index > 0) 1f else 0.3f)) }
-    IconButton(onClick = { onMove(index + 1) }, enabled = interactive && index < count - 1,
-        modifier = Modifier.size(48.dp).semantics { contentDescription = "Move segment ${segment.order} down" }) { Text("↓", color = Color.White.copy(alpha = if (interactive && index < count - 1) 1f else 0.3f)) }
 }

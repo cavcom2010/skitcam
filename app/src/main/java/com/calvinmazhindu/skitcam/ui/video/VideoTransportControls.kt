@@ -37,14 +37,17 @@ fun VideoTransportControls(
     showProgress: Boolean = true,
     overlay: Boolean = false,
     seekContentDescription: String = "Seek video playback",
-    progressContent: (@Composable (Modifier) -> Unit)? = null
+    progressContent: (@Composable (Modifier) -> Unit)? = null,
+    progressOnOwnRow: Boolean = false,
+    showTime: Boolean = true
 ) {
     BoxWithConstraints(
         modifier.fillMaxWidth()
             .then(if (overlay) Modifier.background(Color.Black.copy(alpha = 0.62f)) else Modifier)
             .padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
-        val stacked = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.5f
+        val stacked = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.5f || progressOnOwnRow
+        val veryNarrow = maxWidth < 220.dp
         @Composable
         fun buttons() {
             if (onJumpToStart != null) {
@@ -72,16 +75,26 @@ fun VideoTransportControls(
         }
         @Composable
         fun timeLabel() {
-            Text(
-                "${formatTransportTime(positionMs)} / ${formatTransportTime(durationMs)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = SkitCamColors.TextPrimary,
-                maxLines = 1,
-                modifier = Modifier.semantics {
-                    contentDescription =
-                        "Playback time ${formatTransportTime(positionMs)} of ${formatTransportTime(durationMs)}"
+            val current = formatTransportTime(positionMs)
+            val total = formatTransportTime(durationMs)
+            val description = "Playback time $current of $total"
+            if (veryNarrow) {
+                Column(Modifier.semantics { contentDescription = description },
+                    horizontalAlignment = Alignment.End) {
+                    Text(current, style = MaterialTheme.typography.labelSmall,
+                        color = SkitCamColors.TextPrimary, maxLines = 1)
+                    Text("of $total", style = MaterialTheme.typography.labelSmall,
+                        color = SkitCamColors.TextSecondary, maxLines = 1)
                 }
-            )
+            } else {
+                Text(
+                    "$current / $total",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SkitCamColors.TextPrimary,
+                    maxLines = 1,
+                    modifier = Modifier.semantics { contentDescription = description }
+                )
+            }
         }
         @Composable
         fun progress(slot: Modifier) {
@@ -104,7 +117,10 @@ fun VideoTransportControls(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     buttons()
                     Spacer(Modifier.weight(1f))
-                    timeLabel()
+                    if (showTime && !veryNarrow) timeLabel()
+                }
+                if (showTime && veryNarrow) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { timeLabel() }
                 }
                 if (showProgress) progress(Modifier.fillMaxWidth())
             }
@@ -113,7 +129,7 @@ fun VideoTransportControls(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 buttons()
                 if (showProgress) progress(Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
-                timeLabel()
+                if (showTime) timeLabel()
             }
         }
     }
