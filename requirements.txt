@@ -1,0 +1,18 @@
+# Python dependencies for the helper scripts in tools/.
+# SkitCam itself is an Android/Gradle project and has no Python runtime deps.
+#
+#   tools/verify_photo_viewfinder.py  -> Pillow
+#   tools/make_profile_fixture.py     -> Pillow
+#   tools/correlate_audio_join.py     -> numpy
+#   tools/make_timing_probe.py        -> opencv-python
+#   everything else                   -> standard library only
+#
+# Several tools also shell out to ffmpeg/ffprobe. Those are system binaries and
+# cannot be installed with pip:
+#   sudo apt install ffmpeg
+#
+# Install with: pip install -r requirements.txt
+
+Pillow>=10.0
+numpy>=1.26
+opencv-python>=4.10
