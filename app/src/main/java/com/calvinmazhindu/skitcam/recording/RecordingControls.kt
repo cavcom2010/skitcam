@@ -196,14 +196,18 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                 })
             }
         }
+        val activeSession = snapshot.state in setOf(RecordingState.Recording,RecordingState.Paused,RecordingState.Error)
+        // While a session is open the mode, gallery and lens controls are disabled.
+        // The landscape rail is too short to keep those dead controls above Finish
+        // and Arrange on tall-aspect displays, so omit them there.
+        val compactCaptureRail = verticalShutter && activeSession
         CaptureDockRow(
             vertical = verticalShutter,
-            leading = leading,
-            modeSelector = modeSelector,
+            leading = if (compactCaptureRail) ({}) else leading,
+            modeSelector = if (compactCaptureRail) ({}) else modeSelector,
             shutter = primary,
-            trailing = trailing
+            trailing = if (compactCaptureRail) ({}) else trailing
         )
-        val activeSession = snapshot.state in setOf(RecordingState.Recording,RecordingState.Paused,RecordingState.Error)
         Box(Modifier.fillMaxWidth().heightIn(min = SkitCamSpacing.touchTarget), contentAlignment = Alignment.Center) {
             if (activeSession) {
                 val finish: @Composable () -> Unit = {
@@ -224,7 +228,9 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                 }
                 if (verticalShutter) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
-                        finish(); arrange()
+                        finish()
+                        // Keep the rail compact: only reserve space once Arrange is actionable.
+                        if (snapshot.state == RecordingState.Paused && snapshot.count >= 2 && !snapshot.unresolved) arrange()
                     }
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(SkitCamSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
