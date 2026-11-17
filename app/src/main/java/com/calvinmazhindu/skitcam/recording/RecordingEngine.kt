@@ -22,7 +22,8 @@ data class Session(val id: String, val createdAtMs: Long, val orientationDegrees
     val pending: PendingSegment? = null, val error: String? = null,
     val playbackOrder: List<String> = segments.filter { it.kept }.sortedBy { it.order }.map { it.id },
     val lens: CameraLens = CameraLens.Rear, val captureProfile: CaptureProfile? = null,
-    val invalidProfileJson: String? = null) {
+    val invalidProfileJson: String? = null,
+    val shelfOrder: List<String>? = null) {
     val durationMs: Long get() = safeDurationSum(segments.filter { it.kept }.map { it.displayDurationMs })
     val durationEstimated get() = segments.any { it.kept && it.trim == null }
     val retainedCount: Int get() = segments.count { it.kept }
@@ -34,6 +35,21 @@ data class Session(val id: String, val createdAtMs: Long, val orientationDegrees
         val retained = segments.filter { it.kept }.map { it.id }.toSet()
         return segments.all { it.id.isNotBlank() } && segments.map { it.id }.distinct().size == segments.size &&
             ids.size == retained.size && ids.toSet() == retained
+    }
+    /** Legacy sessions retain discarded slots while kept slots reflect their saved playback order. */
+    val orderedSegmentIds: List<String> get() {
+        shelfOrder?.let { return it }
+        val kept = playbackOrder.iterator()
+        return segments.sortedBy { it.order }.map { if (it.kept) kept.next() else it.id }
+    }
+    fun validShelfOrder(ids: List<String>): Boolean {
+        val all = segments.map { it.id }
+        return ids.size == all.size && ids.toSet() == all.toSet()
+    }
+    fun shelfWithPlayback(ids: List<String>): List<String> {
+        val keptIds = segments.filter { it.kept }.map { it.id }.toSet()
+        val next = ids.iterator()
+        return orderedSegmentIds.map { if (it in keptIds) next.next() else it }
     }
 }
 data class RecordingSnapshot(val state: RecordingState = RecordingState.Ready,
@@ -204,7 +220,8 @@ class RecordingEngine(
         }
         val updated = session.copy(segments = session.segments.map {
             if (it.id == segmentId) it.copy(kept = kept) else it
-        }, playbackOrder = if (kept) session.playbackOrder + segmentId else session.playbackOrder - segmentId)
+        }, playbackOrder = if (kept) session.playbackOrder + segmentId else session.playbackOrder - segmentId,
+            shelfOrder = session.shelfOrder?.let { if (kept) it - segmentId + segmentId else it })
         return try {
             store.save(updated)
             publish(session = updated, message = if (updated.retainedCount == MAX_SEGMENTS)
@@ -249,12 +266,35 @@ class RecordingEngine(
         }
         if (session.playbackOrder == order) return SegmentEditResult(true)
         return try {
-            val updated = session.copy(playbackOrder = order.toList())
+            val updated = session.copy(playbackOrder = order.toList(),
+                shelfOrder = session.shelfOrder?.let { session.shelfWithPlayback(order) })
             store.save(updated)
             publish(session = updated)
             SegmentEditResult(true)
         } catch (_: Exception) {
             SegmentEditResult(false, "Could not save the order. The previous order and all MP4s are unchanged.")
+        }
+    }
+    /** A single transaction commits display order and kept playback order, never recording chronology. */
+    fun saveShelfOrder(expected: Session, order: List<String>): SegmentEditResult {
+        if (snapshot.state != RecordingState.Paused || activeId != null || snapshot.unresolved)
+            return SegmentEditResult(false, "Reordering is only available in a resolved paused session.")
+        val session = snapshot.session ?: return SegmentEditResult(false, "No session is available.")
+        if (session.id != expected.id || session.segments != expected.segments ||
+            session.playbackOrder != expected.playbackOrder || session.shelfOrder != expected.shelfOrder)
+            return SegmentEditResult(false, "The session changed. Cancel and unlock reordering again.")
+        if (!session.validShelfOrder(order))
+            return SegmentEditResult(false, "Order must contain each segment exactly once.")
+        val kept = session.segments.filter { it.kept }.map { it.id }.toSet()
+        val playback = order.filter { it in kept }
+        if (order == session.orderedSegmentIds) return SegmentEditResult(true)
+        return try {
+            val updated = session.copy(shelfOrder = order.toList(), playbackOrder = playback)
+            store.save(updated)
+            publish(session = updated)
+            SegmentEditResult(true)
+        } catch (_: Exception) {
+            SegmentEditResult(false, "Could not save the order. Previous order and all original files are unchanged.")
         }
     }
     fun stop() {
@@ -359,7 +399,8 @@ class RecordingEngine(
             // UI count changes only after durable registration, never when stop() is called.
             val updated = session.copy(state = next, segments = session.segments + segment,
                 pending = null, error = if (next == RecordingState.Error) message else null,
-                playbackOrder = session.playbackOrder + segment.id)
+                playbackOrder = session.playbackOrder + segment.id,
+                shelfOrder = session.shelfOrder?.plus(segment.id))
             store.save(updated)
             publish(next, updated, 0, message)
         } catch (exception: Exception) {

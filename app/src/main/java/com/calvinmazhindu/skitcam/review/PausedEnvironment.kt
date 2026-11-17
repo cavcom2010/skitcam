@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -30,6 +31,10 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -42,6 +47,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
 import com.calvinmazhindu.skitcam.recording.*
+import com.calvinmazhindu.skitcam.arrange.InlineReorderViewModel
 import com.calvinmazhindu.skitcam.trim.TrimRange
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
 import com.calvinmazhindu.skitcam.ui.components.SegmentStatusMark
@@ -71,12 +77,16 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     review: SegmentReviewController, loader: ThumbnailLoader, trim: TrimViewModel,
     modifier: Modifier = Modifier,
     onPlayFromBeginning: (() -> Unit)? = null,
-    onPlayFrom: ((Segment) -> Unit)? = null, immersiveReview: Boolean = true) {
+    onPlayFrom: ((Segment) -> Unit)? = null, immersiveReview: Boolean = true,
+    reorder: InlineReorderViewModel? = null, reorderEligible: Boolean = false,
+    navigateReorder: (() -> Unit) -> Unit = { it() }) {
     val selected = review.selection?.takeIf { it.sessionId == session.id }
     val segment = session.segments.find { it.id == selected?.segmentId }
     fun openReview(item: Segment) {
-        trim.open(session, item)
-        review.open(session.id, item, fullSource = true)
+        navigateReorder {
+            trim.open(session, item)
+            review.open(session.id, item, fullSource = true)
+        }
     }
     BackHandler(enabled = selected != null && !(immersiveReview && segment != null)) {
         trim.close(); review.close()
@@ -121,6 +131,23 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
         } else {
             Column(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                    if (reorder?.draft != null) {
+                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(reorder.notice ?: "Reorder unlocked",
+                                Modifier.align(Alignment.CenterVertically).semantics { liveRegion = LiveRegionMode.Polite },
+                                style = MaterialTheme.typography.labelMedium)
+                            TextButton(onClick = { reorder.cancel() }, enabled = !reorder.saving,
+                                modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel") }
+                            Button(onClick = { reorder.done(model) },
+                                enabled = reorderEligible && !reorder.saving && reorder.draggingId == null,
+                                modifier = Modifier.heightIn(min = 48.dp)) { Text(if (reorder.saving) "Saving…" else "Done") }
+                        }
+                    }
+                    reorder?.error?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         val clipCount = session.segments.size
                         Text("${session.retainedCount} kept · $clipCount ${if (clipCount == 1) "clip" else "clips"}",
@@ -134,7 +161,15 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                     }
                     if (!playEnabled) Text("No kept clips to play.", style = MaterialTheme.typography.labelSmall)
                 }
-                if (landscape) {
+                if (reorder != null) {
+                    Row(Modifier.weight(1f)) {
+                        InlineSegmentShelf(session, reorder, reorderEligible, loader, review.saving,
+                            ::openReview, ::decide, ::playFrom)
+                        Box(Modifier.weight(1f).fillMaxHeight().padding(start = 8.dp), contentAlignment = Alignment.Center) {
+                            if (segment != null) ReviewPanel(session, segment, model, review, onPlayFrom = playFrom(segment))
+                        }
+                    }
+                } else if (landscape) {
                     Column(Modifier.weight(1f)) {
                         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                             if (segment != null) ReviewPanel(session, segment, model, review,
@@ -172,9 +207,11 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
 }
 
 @Composable
-private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: ThumbnailLoader,
+internal fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: ThumbnailLoader,
     enabled: Boolean, saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
-    onPlayFrom: (() -> Unit)? = null) {
+    onPlayFrom: (() -> Unit)? = null, reorderPosition: String? = null,
+    onUnlock: (() -> Unit)? = null, onMoveUp: (() -> Unit)? = null, onMoveDown: (() -> Unit)? = null,
+    showMenu: Boolean = true, pointerClickEnabled: Boolean = true) {
     val thumbnail by produceState<ThumbnailResult>(ThumbnailResult.Loading, segment.path, enabled) {
         if (enabled) value = loader.load(segment)
     }
@@ -182,18 +219,25 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
     val disposition = if (segment.kept) "Kept" else "Discarded"
     val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
     Box(Modifier.width(if (landscape) 112.dp else 80.dp).heightIn(min = 100.dp)) {
-        Card(onClick = onOpen, enabled = !saving,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp)
+        Card(modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp)
+                .then(if (pointerClickEnabled) Modifier.clickable(enabled = !saving, onClick = onOpen) else Modifier)
                 .border(1.5.dp, segmentStatusColor(segment.kept), MaterialTheme.shapes.small)
                 .clearAndSetSemantics {
                 contentDescription = "Review segment ${segment.order}, $disposition$availability"
-                stateDescription = when (thumbnail) {
+                stateDescription = listOfNotNull(reorderPosition?.let { "Position $it" }, when (thumbnail) {
                     is ThumbnailResult.Ready -> "Thumbnail ready"
                     ThumbnailResult.Loading -> "Loading thumbnail"
                     ThumbnailResult.Unavailable -> "Thumbnail unavailable"
-                }
+                }).joinToString(". ")
                 role = Role.Button
-                onClick(label = "Review segment ${segment.order}") { onOpen(); true }
+                if (reorderPosition != null) liveRegion = LiveRegionMode.Polite
+                if (saving) disabled()
+                onClick(label = "Review segment ${segment.order}") { if (!saving) onOpen(); !saving }
+                if (onUnlock != null) onLongClick(label = "Unlock reordering") { onUnlock(); true }
+                customActions = buildList {
+                    if (onMoveUp != null) add(CustomAccessibilityAction("Move up") { onMoveUp(); true })
+                    if (onMoveDown != null) add(CustomAccessibilityAction("Move down") { onMoveDown(); true })
+                }
             }, colors = CardDefaults.cardColors(containerColor = Color(0xFF25252B), contentColor = Color.White)) {
             Column(Modifier.padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.fillMaxWidth().height(50.dp).alpha(if (segment.kept) 1f else 0.45f),
@@ -209,7 +253,7 @@ private fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbnai
                 Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}", style = MaterialTheme.typography.labelSmall)
             }
         }
-        Box(Modifier.align(Alignment.TopEnd)) {
+        if (showMenu) Box(Modifier.align(Alignment.TopEnd)) {
             IconButton(onClick = { actions = true }, enabled = !saving,
                 modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.45f))
                     .semantics { contentDescription = "More actions for segment ${segment.order}" }) {

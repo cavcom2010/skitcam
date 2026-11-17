@@ -36,7 +36,6 @@
     <string name="resume_recording">Resume recording</string>
     <string name="stop_recording">Stop recording</string>
     <string name="finish_recording">Finish</string>
-    <string name="arrange">Arrange</string>
     <string name="open_media">Open saved media gallery</string>
     <string name="switch_to_front">Switch to front camera</string>
     <string name="switch_to_rear">Switch to rear camera</string>

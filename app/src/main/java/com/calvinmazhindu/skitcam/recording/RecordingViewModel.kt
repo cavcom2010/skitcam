@@ -48,6 +48,8 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
         runtime.setSegmentKept(sessionId, segmentId, kept, finished)
     fun savePlaybackOrder(sessionId: String, expected: List<String>, order: List<String>, finished: (SegmentEditResult) -> Unit) =
         runtime.savePlaybackOrder(sessionId, expected, order, finished)
+    fun saveShelfOrder(expected: Session, order: List<String>, finished: (SegmentEditResult) -> Unit) =
+        runtime.saveShelfOrder(expected, order, finished)
     fun saveTrim(sessionId: String, segment: Segment, source: TrimSource, range: TrimRange, finished: (SegmentEditResult) -> Unit) =
         runtime.saveTrim(sessionId, segment, source, range, finished)
     fun background() = runtime.background()
@@ -151,6 +153,15 @@ private class RecordingRuntime(private val application: Application) {
     fun saveTrim(sessionId: String, segment: Segment, source: TrimSource, range: TrimRange, finished: (SegmentEditResult) -> Unit) {
         worker.execute {
             val result = engine.saveTrim(sessionId, segment.id, segment, source, range)
+            main.post { finished(result) }
+        }
+    }
+    fun saveShelfOrder(expected: Session, order: List<String>, finished: (SegmentEditResult) -> Unit) {
+        val proposed = order.toList()
+        worker.execute {
+            val result = if (!recovered.value || commandPending.value || ExportJournal.busy)
+                SegmentEditResult(false, "Wait for recording, recovery or export to finish.")
+            else engine.saveShelfOrder(expected, proposed)
             main.post { finished(result) }
         }
     }

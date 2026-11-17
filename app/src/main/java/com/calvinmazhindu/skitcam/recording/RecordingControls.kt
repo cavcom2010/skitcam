@@ -42,7 +42,8 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     previewRotation: Int?, cameraGranted: Boolean,
     showShortcuts: Boolean = false, verticalShutter: Boolean = false, modeSelector: @Composable () -> Unit = {},
     leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
-    beforeRecording: () -> Unit = {}, onArrange: () -> Unit = {}, onBackground: () -> Unit = beforeRecording) {
+    beforeRecording: () -> Unit = {}, onBackground: () -> Unit = beforeRecording,
+    navigate: (() -> Unit) -> Unit = { it() }) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
     val commandPending by model.commandPending.collectAsStateWithLifecycle()
@@ -167,7 +168,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                 }
                 RecordingState.Recording -> Shutter(true,stringResource(R.string.pause_recording),CameraIcon.Pause) { model.pause() }
                 RecordingState.Paused -> Button(
-                    onClick={ releaseReview();if(microphone) model.resume(pose) else requestAudio() },
+                    onClick={ navigate { releaseReview();if(microphone) model.resume(pose) else requestAudio() } },
                     enabled=canResume,
                     shape=CircleShape,
                     modifier=Modifier.size(SkitCamSpacing.shutter).semantics {
@@ -199,7 +200,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
         val activeSession = snapshot.state in setOf(RecordingState.Recording,RecordingState.Paused,RecordingState.Error)
         // While a session is open the mode, gallery and lens controls are disabled.
         // The landscape rail is too short to keep those dead controls above Finish
-        // and Arrange on tall-aspect displays, so omit them there.
+        // on tall-aspect displays, so omit them there.
         val compactCaptureRail = verticalShutter && activeSession
         CaptureDockRow(
             vertical = verticalShutter,
@@ -213,30 +214,14 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                 val finish: @Composable () -> Unit = {
                     SkitCamSecondaryButton(
                         text = stringResource(R.string.finish_recording),
-                        onClick = { val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap) },
+                        onClick = { navigate { val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap) } },
                         enabled = snapshot.state == RecordingState.Recording || !snapshot.unresolved,
                         modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget).semantics {
                             contentDescription = stopRecordingLabel
                         }
                     )
                 }
-                val arrange: @Composable () -> Unit = {
-                    TextButton(onClick = onArrange, enabled = snapshot.state == RecordingState.Paused && snapshot.count >= 2 && !snapshot.unresolved,
-                        modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget)) {
-                        Text(stringResource(R.string.arrange), color = SkitCamColors.Warm)
-                    }
-                }
-                if (verticalShutter) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
-                        finish()
-                        // Keep the rail compact: only reserve space once Arrange is actionable.
-                        if (snapshot.state == RecordingState.Paused && snapshot.count >= 2 && !snapshot.unresolved) arrange()
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(SkitCamSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
-                        finish(); arrange()
-                    }
-                }
+                finish()
             }
         }
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.TopCenter) {

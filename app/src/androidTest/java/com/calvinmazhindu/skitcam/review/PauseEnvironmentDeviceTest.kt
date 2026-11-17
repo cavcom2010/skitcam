@@ -104,7 +104,7 @@ class PauseEnvironmentDeviceTest {
     private fun awaitThumbnail(order: Int) {
         await("thumbnail $order decoded") {
             node { it.contentDescription?.startsWith("Review segment $order,") == true &&
-                (Build.VERSION.SDK_INT < 30 || it.stateDescription?.toString() == "Thumbnail ready") } != null
+                (Build.VERSION.SDK_INT < 30 || it.stateDescription?.toString()?.endsWith("Thumbnail ready") == true) } != null
         }
     }
     private fun play() {
@@ -146,10 +146,15 @@ class PauseEnvironmentDeviceTest {
             await("additional scroll fixture") { model.snapshots.value.activeDurationMs >= 1200 }
             model.pause(); state(RecordingState.Paused)
         }
-        val description = "Completed segments, ${if (landscape) "horizontal" else "vertical"} strip"
+        val description = "Completed segments, vertical strip"
         await("scrollable strip") { node { it.contentDescription?.toString() == description && it.isScrollable } != null }
-        assertTrue(node { it.contentDescription?.toString() == description }!!
-            .performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
+        var scrolls = 0
+        while (node { it.contentDescription?.startsWith("Review segment $expectedCount,") == true } == null &&
+            scrolls++ < expectedCount) {
+            assertTrue(node { it.contentDescription?.toString() == description }!!
+                .performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))
+            Thread.sleep(300)
+        }
         awaitThumbnail(expectedCount)
         screenshot(if (landscape) "landscape-scrolled" else "portrait-scrolled")
         model.stop(); state(RecordingState.Completed)
@@ -194,11 +199,11 @@ class PauseEnvironmentDeviceTest {
             landscape && model.cameraReady
         }
         begin(270)
-        await("horizontal strip") { node { it.contentDescription?.toString() == "Completed segments, horizontal strip" } != null }
+        await("vertical shelf in landscape") { node { it.contentDescription?.toString() == "Completed segments, vertical strip" } != null }
         awaitThumbnail(1)
         val bounds = Rect()
         node { it.contentDescription?.startsWith("Review segment 1,") == true }!!.getBoundsInScreen(bounds)
-        assertTrue(bounds.top > 500)
+        assertTrue("Shelf remains at the left of the camera", bounds.left < 300)
         screenshot("landscape-strip")
         // Activity recreation during the rotation gives this screen a fresh review controller.
         scenario.onActivity { review = it.reviewController }

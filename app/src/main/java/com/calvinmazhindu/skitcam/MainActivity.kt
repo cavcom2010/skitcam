@@ -67,8 +67,7 @@ import com.calvinmazhindu.skitcam.review.ThumbnailLoader
 import com.calvinmazhindu.skitcam.playback.SkitPlaybackController
 import com.calvinmazhindu.skitcam.playback.SkitPlaybackScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.calvinmazhindu.skitcam.arrange.ArrangementViewModel
-import com.calvinmazhindu.skitcam.arrange.ArrangementScreen
+import com.calvinmazhindu.skitcam.arrange.InlineReorderViewModel
 import androidx.compose.ui.semantics.clearAndSetSemantics
 
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
@@ -81,7 +80,7 @@ class MainActivity : ComponentActivity() {
     val recordingModel: RecordingViewModel by lazy { ViewModelProvider(this)[RecordingViewModel::class.java] }
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
     val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
-    val arrangementModel: ArrangementViewModel by lazy { ViewModelProvider(this)[ArrangementViewModel::class.java] }
+    val inlineReorderModel: InlineReorderViewModel by lazy { ViewModelProvider(this)[InlineReorderViewModel::class.java] }
     val orientation: CameraOrientationController by lazy { CameraOrientationController(this) }
     val playback: SkitPlaybackController by lazy { SkitPlaybackController(applicationContext) }
     private val beforeCapture: (Int) -> Unit = { degrees ->
@@ -119,7 +118,7 @@ class MainActivity : ComponentActivity() {
         cameraModel.idle()
         recordingModel.cameraReady = false
         recordingModel.audio.foreground(false)
-        arrangementModel.cancelDrag()
+        inlineReorderModel.cancelDrag()
         playback.close()
         reviewController.close()
         trimModel.close()
@@ -146,13 +145,24 @@ internal fun MainActivity.CameraScreen() {
         if(landscape) WindowInsets.safeDrawing.asPaddingValues().calculateEndPadding(LocalLayoutDirection.current) else 0.dp
     val snapshot by recordingModel.snapshots.collectAsStateWithLifecycle()
     val review = reviewController
-    val arrangement = arrangementModel
+    val inlineReorder = inlineReorderModel
     val export by ExportJournal.status.collectAsStateWithLifecycle()
     val exportBusy by ExportJournal.busyState.collectAsStateWithLifecycle()
     val cameraReady by recordingModel.cameraAvailability.collectAsStateWithLifecycle()
     val snackbars = remember { SnackbarHostState() }
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
+    LaunchedEffect(recovered) {
+        if (recovered) inlineReorder.restore(recordingModel.snapshots.value.session)
+    }
+    var reorderNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun navigateReorder(action: () -> Unit) {
+        if (inlineReorder.recovering || inlineReorder.saving) return
+        if (inlineReorder.draft != null) reorderNavigation = action else action()
+    }
+    BackHandler(enabled = inlineReorder.draft != null && review.selection == null) {
+        navigateReorder { finish() }
+    }
     val camera = cameraModel
     val playback = this@CameraScreen.playback
     LaunchedEffect(snapshot.state, playback.active) {
@@ -167,7 +177,14 @@ internal fun MainActivity.CameraScreen() {
     val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
     val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
-    val reviewing = review.selection != null && arrangement.draft == null && !finishing
+    val reorderEligible = recovered && !inlineReorder.recovering && !snapshot.unresolved &&
+        !commandPending && !exportBusy && !finishing && !review.saving &&
+        snapshot.state == RecordingState.Paused &&
+        inlineReorder.draft?.let { pending -> snapshot.session?.let(pending::matches) } != false
+    LaunchedEffect(snapshot.session, inlineReorder.draft != null) {
+        if (!inlineReorder.saving) inlineReorder.validate(snapshot.session)
+    }
+    val reviewing = review.selection != null && !finishing
     val immersiveVideoUi = reviewing || playback.active
     // This owner survives Photo/Video control changes and the finishing overlay.
     SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
@@ -243,7 +260,7 @@ internal fun MainActivity.CameraScreen() {
     var settings by rememberSaveable { mutableStateOf(false) }
     var photoRatioMenu by remember { mutableStateOf(false) }
     val blocked = snapshot.state in setOf(RecordingState.Starting,RecordingState.Finalising,RecordingState.Stopping)
-    val editors = arrangement.draft != null || trimModel.segment != null || review.selection != null || finishing
+    val editors = inlineReorder.draft != null || trimModel.segment != null || review.selection != null || finishing
     val adjustments = !blocked && !editors && !photos.busy && camera.streaming
     LaunchedEffect(editors, blocked) { if(editors || blocked) { quick = false; settings = false } }
     LaunchedEffect(photo,photos.busy,quick,settings,editors,blocked) {
@@ -264,7 +281,6 @@ internal fun MainActivity.CameraScreen() {
                 ExportJournal.busy,photoModel.busy || recordingModel.commandPending.value || camera.video.pending) || camera.switching) return
         startActivity(Intent(this@CameraScreen,com.calvinmazhindu.skitcam.gallery.SavedMediaActivity::class.java))
     }
-    val arranging = arrangement.draft != null || finishing
     val thumbnails = remember { ThumbnailLoader() }
     var headerHeight by remember { mutableIntStateOf(0) }
     var controlsHeight by remember { mutableIntStateOf(0) }
@@ -272,8 +288,6 @@ internal fun MainActivity.CameraScreen() {
         if (snapshot.state != RecordingState.Paused || trimModel.sessionId?.let { it != snapshot.session?.id } == true) trimModel.close()
         if (snapshot.state != RecordingState.Paused ||
             review.selection?.sessionId?.let { it != snapshot.session?.id } == true) review.close()
-        if (snapshot.state != RecordingState.Paused ||
-            arrangement.draft?.sessionId?.let { it != snapshot.session?.id } == true) arrangement.invalidate()
     }
     val preferences = remember { getSharedPreferences("camera_permission", Context.MODE_PRIVATE) }
     fun hasPermission() = ContextCompat.checkSelfPermission(
@@ -360,7 +374,7 @@ internal fun MainActivity.CameraScreen() {
                 landscape=landscape,
                 fullPhoto=fullPhoto,
                 dockWidth=dockWidth,
-                arranging=arranging,
+                arranging=finishing,
                 streaming=camera.streaming,
                 boundLabel=camera.boundInfo?.concise ?: stringResource(R.string.camera_unavailable),
                 lensLabel=lensLabel,
@@ -377,7 +391,7 @@ internal fun MainActivity.CameraScreen() {
                 modifier=Modifier.onSizeChanged { headerHeight = it.height }
             )
         }
-        if (!photo && !arranging && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
+        if (!photo && !finishing && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
             val pausedModifier = if (immersiveVideoUi) Modifier.fillMaxSize() else Modifier.fillMaxSize()
@@ -388,12 +402,14 @@ internal fun MainActivity.CameraScreen() {
                 .padding(8.dp)
             if (playback.active) {
                 SkitPlaybackScreen(playback, pausedModifier) { playback.close() }
-            } else if (!arranging) {
+            } else if (!finishing) {
                 PausedEnvironment(snapshot.session!!, landscape, recordingModel, review, thumbnails, trimModel,
                     modifier = pausedModifier,
-                    onPlayFromBeginning = { snapshot.session?.let { review.close(); playback.play(it) } },
-                    onPlayFrom = { item -> snapshot.session?.let { review.close(); playback.play(it, item.id) } },
-                    immersiveReview = reviewing)
+                    onPlayFromBeginning = { navigateReorder { recordingModel.snapshots.value.session?.let { review.close(); playback.play(it) } } },
+                    onPlayFrom = { item -> navigateReorder { recordingModel.snapshots.value.session?.let { review.close(); playback.play(it, item.id) } } },
+                    immersiveReview = reviewing,
+                    reorder = inlineReorder, reorderEligible = reorderEligible,
+                    navigateReorder = ::navigateReorder)
             }
         }
         val modeSelector: @Composable () -> Unit = {
@@ -408,7 +424,7 @@ internal fun MainActivity.CameraScreen() {
             else Modifier.align(Alignment.BottomCenter).fillMaxWidth())
                 .onSizeChanged { controlsHeight = it.height }
                 .then(if(immersiveVideo || fullPhoto || wideNineSixteen) Modifier.blockPreviewInput() else Modifier)
-                .then(if (arranging || settings) Modifier.clearAndSetSemantics {} else Modifier)
+                .then(if (finishing || settings) Modifier.clearAndSetSemantics {} else Modifier)
                 .background(if (landscape) Brush.horizontalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f)))
                 else Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(
@@ -436,15 +452,9 @@ internal fun MainActivity.CameraScreen() {
                 showShortcuts = true, verticalShutter = landscape, modeSelector = modeSelector,
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
-                beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close();arrangement.invalidate() },
-                onBackground = { playback.close(); review.close() },
-                onArrange = {
-                    val current = recordingModel.snapshots.value
-                    if (current.state == RecordingState.Paused && current.count >= 2 && !current.unresolved) {
-                        review.close()
-                        arrangement.open(current.session!!)
-                    }
-                })
+                 beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close() },
+                 navigate = ::navigateReorder,
+                 onBackground = { playback.close(); review.close() })
                 }
                 Box(Modifier.fillMaxWidth().height(20.dp),contentAlignment=Alignment.Center) {
                     val inline=camera.message ?: camera.focusResult.takeIf { camera.focus!=null }
@@ -456,10 +466,33 @@ internal fun MainActivity.CameraScreen() {
             CameraTools(camera,false,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,onMore=if(settingsAllowed) {{quick=false;settings=true}} else null,audio=recordingModel.audio) { quick=false }
         }
         if(settings && settingsAllowed) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,audio=recordingModel.audio) { settings=false }
-        if (arrangement.draft != null && snapshot.state == RecordingState.Paused && snapshot.session != null) {
-            ArrangementScreen(snapshot.session!!, arrangement, recordingModel, review, thumbnails)
-        }
         if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
+        if (reorderNavigation != null) {
+            AlertDialog(
+                onDismissRequest = { if (!inlineReorder.saving) reorderNavigation = null },
+                title = { Text("Finish reordering?") },
+                text = { Column {
+                    Text("Done saves the new order. Cancel changes restores the saved order.")
+                    inlineReorder.error?.let { Text(it) }
+                } },
+                confirmButton = {
+                    TextButton(enabled = reorderEligible && !inlineReorder.saving,
+                        onClick = {
+                            val action = reorderNavigation
+                            inlineReorder.done(recordingModel) { reorderNavigation = null; action?.invoke() }
+                        }) { Text("Done and continue") }
+                },
+                dismissButton = {
+                    FlowRow {
+                        TextButton(enabled = !inlineReorder.saving, onClick = {
+                            val action = reorderNavigation
+                            inlineReorder.cancel(); reorderNavigation = null; action?.invoke()
+                        }) { Text("Cancel changes") }
+                        TextButton(enabled = !inlineReorder.saving,
+                            onClick = { reorderNavigation = null }) { Text("Keep reordering") }
+                    }
+                })
+        }
         SnackbarHost(snackbars,Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(
             end=if(landscape) dockWidth else 0.dp,
             bottom=if(landscape) 56.dp else with(density) { controlsHeight.toDp()+8.dp })) { data ->
