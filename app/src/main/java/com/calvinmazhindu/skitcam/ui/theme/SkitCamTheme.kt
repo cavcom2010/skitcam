@@ -58,7 +58,7 @@ object SkitCamShapes {
 
 private val SkitCamColorScheme = darkColorScheme(
     primary = SkitCamColors.Rose,
-    onPrimary = Color.White,
+    onPrimary = SkitCamColors.Ink,
     primaryContainer = SkitCamColors.RoseStrong,
     onPrimaryContainer = Color.White,
     secondary = SkitCamColors.Warm,

@@ -3,7 +3,7 @@ package com.calvinmazhindu.skitcam.audio
 /** Device identity is valid only for this process/device connection. Never a saved preference. */
 enum class InputKind { BuiltIn, Usb, Wired, Bluetooth, Other }
 data class AudioInput(val id: Int, val kind: InputKind, val name: String, val androidType: Int?=null, val address: String?=null)
-enum class CaptureHealth { Idle, Active, Muted, Silenced, Failed, Unavailable }
+enum class CaptureHealth { Idle, Preparing, Active, Muted, Silenced, Failed, Unavailable }
 data class AudioObservation(val sessionId: Int, val device: AudioInput)
 data class AudioSnapshot(
     val inputs: List<AudioInput> = emptyList(),
@@ -23,6 +23,7 @@ data class AudioSnapshot(
         health == CaptureHealth.Muted -> "Recording audio muted"
         health == CaptureHealth.Failed -> "Microphone capture failed"
         health == CaptureHealth.Unavailable -> "Recording audio unavailable"
+        health == CaptureHealth.Preparing -> "Preparing microphone…"
         health == CaptureHealth.Active -> "Recording audio · input unverified"
         else -> "Microphone · Android automatic"
     }

@@ -36,6 +36,10 @@ class PauseEnvironmentDeviceTest {
         android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText().trim()
     }
     @Before fun open() {
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.m13validation",
+            "com.calvinmazhindu.skitcam.m13reviewvalidation",
+            "com.calvinmazhindu.skitcam.m13reviewstablevalidation",
+            "com.calvinmazhindu.skitcam.m12cvalidation")) { "Validation package only." }
         for (permission in listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) {
             shell("pm grant ${context.packageName} $permission")
         }
@@ -96,6 +100,17 @@ class PauseEnvironmentDeviceTest {
         while (!current.isClickable && current.parent != null) current = current.parent
         assertTrue(current.performAction(AccessibilityNodeInfo.ACTION_CLICK))
     }
+    private fun action(label: String) {
+        if (label in setOf("Discard", "Restore")) {
+            val order = main {
+                model.snapshots.value.session!!.segments.single { it.id == review.selection!!.segmentId }.order
+            }
+            click { it.contentDescription?.toString() == "More actions for segment $order" }
+            click { it.contentDescription?.toString() == "$label segment $order" }
+            return
+        }
+        click { it.text?.toString() == label || it.contentDescription?.toString() == label }
+    }
     private fun openFirst() {
         click { it.contentDescription?.startsWith("Review segment 1,") == true }
         await("review ready") { main { review.player?.playbackState == Player.STATE_READY } }
@@ -115,9 +130,10 @@ class PauseEnvironmentDeviceTest {
     }
     private fun assertReviewActionsVisible() {
         await("inline trim track") { node { it.contentDescription?.toString() == "Trim timeline" } != null }
-        for (label in listOf("Discard", "Play from here", "Close")) {
-            await("$label visible") { node { it.text?.toString() == label } != null }
-            var target = node { it.text?.toString() == label }!!
+        for (label in listOf("Play", "More actions for segment 1", "Close")) {
+            val description = label
+            await("$label visible") { node { it.contentDescription?.toString() == description } != null }
+            var target = node { it.contentDescription?.toString() == description }!!
             while (!target.isClickable && target.parent != null) target = target.parent
             val bounds = Rect()
             target.getBoundsInScreen(bounds)
@@ -140,7 +156,7 @@ class PauseEnvironmentDeviceTest {
         model.pause(); state(RecordingState.Paused)
         // The wider M10 landscape preview can show six cards without scrolling.
         // Retain an overflowing fixture so scrolling remains genuinely exercised.
-        val expectedCount=if(landscape) 8 else 6
+        val expectedCount=if(landscape) 10 else 8
         repeat(expectedCount-2) {
             awaitPose(pose);model.resume(pose); state(RecordingState.Recording)
             await("additional scroll fixture") { model.snapshots.value.activeDurationMs >= 1200 }
@@ -177,18 +193,18 @@ class PauseEnvironmentDeviceTest {
         openFirst(); assertReviewActionsVisible(); play()
         assertTrue(model.cameraReady)
         scenario.onActivity { assertTrue(ProcessCameraProvider.getInstance(it).get().isBound(model.port.capture)) }
-        click { it.text?.toString() == "Discard" }
+        action("Discard")
         await("discard saved") { model.snapshots.value.count == 0 }
         assertEquals(0L, model.snapshots.value.durationMs)
         assertEquals(bytes, File(first.path).length())
-        click { it.text?.toString() == "Restore" }
+        action("Restore")
         await("keep restored") { model.snapshots.value.count == 1 }
         screenshot("portrait-review")
-        click { it.text?.toString() == "Close" }
+        action("Close")
         assertNull(main { review.player })
         openFirst(); play()
         verifyResume(0, false)
-        assertEquals(6, model.snapshots.value.count)
+        assertEquals(8, model.snapshots.value.count)
     }
     @Suppress("DEPRECATION")
     @Test fun b_landscapeStripAndPlaybackThenResume() {
@@ -209,7 +225,7 @@ class PauseEnvironmentDeviceTest {
         scenario.onActivity { review = it.reviewController }
         openFirst(); assertReviewActionsVisible(); play(); screenshot("landscape-review")
         verifyResume(270, true)
-        assertEquals(8, model.snapshots.value.count)
+        assertEquals(10, model.snapshots.value.count)
     }
     @Test fun c_missingCorruptAndThumbnailFallbacks() {
         val source = model.snapshots.value.session!!.segments.first()
@@ -235,7 +251,7 @@ class PauseEnvironmentDeviceTest {
     @Test fun d_atomicStatusAndRestartFixture() {
         begin()
         openFirst()
-        click { it.text?.toString() == "Discard" }
+        action("Discard")
         await("persisted discard") { model.snapshots.value.count == 0 }
         val discarded = model.snapshots.value.session!!
         assertFalse(SessionFileStore(File(context.filesDir, "sessions")).loadLatest()!!.segments.single().kept)

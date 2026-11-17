@@ -23,6 +23,8 @@ import androidx.compose.ui.semantics.*
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.calvinmazhindu.skitcam.camera.*
+import com.calvinmazhindu.skitcam.ui.components.SkitCamPrimaryButton
+import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.File
@@ -154,7 +156,7 @@ class ProjectExportActivity : ComponentActivity() {
             Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
                 Row(verticalAlignment=Alignment.CenterVertically) {
                     CameraIconButton(CameraIcon.Back,"Back from project export") { finish() }
-                    Text("Portable project",style=MaterialTheme.typography.titleLarge)
+                    Text("Portable project",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
                 }
                 Text("A ZIP for your computer or archive. No account is required.")
                 error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
@@ -173,7 +175,8 @@ class ProjectExportActivity : ComponentActivity() {
                     Text("Edit metadata is included. Desktop editors can use the MP4 files; this ZIP is not a native editing timeline.",style=MaterialTheme.typography.bodySmall)
                     estimate?.let { Text("Media size: approximately ${android.text.format.Formatter.formatFileSize(this@ProjectExportActivity,it)} plus metadata") }
                     sourceError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
-                    Button(onClick={chooseDestination()},enabled=raw!=null && !opening && pickerJob==null && sourceError==null) { Text("Choose destination") }
+                    SkitCamPrimaryButton("Choose destination", { chooseDestination() },
+                        enabled=raw!=null && !opening && pickerJob==null && sourceError==null)
                     Text("Choose a local folder to keep the archive offline. A provider you select may sync files using its own service.",style=MaterialTheme.typography.bodySmall)
                     Text("The incomplete document is named .partial.zip until it has been verified.",style=MaterialTheme.typography.bodySmall)
                 } else if(current!=null) {
@@ -195,7 +198,8 @@ class ProjectExportActivity : ComponentActivity() {
                         p?.let { Text(it.phase);Text("${android.text.format.Formatter.formatFileSize(this@ProjectExportActivity,it.bytes)} processed") }
                         if(p?.total!=null && p.total>0) LinearProgressIndicator(progress={ (p.bytes.toDouble()/p.total).toFloat().coerceIn(0f,1f) },modifier=Modifier.fillMaxWidth())
                         else LinearProgressIndicator(Modifier.fillMaxWidth())
-                        if(state!=ProjectState.Finalising) TextButton(onClick={ jobId?.let { ProjectExportService.cancel(this@ProjectExportActivity,it) } }) { Text("Cancel project export") }
+                        if(state!=ProjectState.Finalising) SkitCamSecondaryButton("Cancel project export",
+                            { jobId?.let { ProjectExportService.cancel(this@ProjectExportActivity,it) } })
                         Text("You can return to the camera. Archiving waits while recording or finishing a video.",style=MaterialTheme.typography.bodySmall)
                     } else if(state==ProjectState.Completed) {
                         Text(current.getString("filename"),style=MaterialTheme.typography.bodySmall)

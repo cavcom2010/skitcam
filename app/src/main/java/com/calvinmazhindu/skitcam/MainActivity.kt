@@ -18,8 +18,12 @@ import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.ui.camera.CameraHeader
 import com.calvinmazhindu.skitcam.ui.camera.CameraModeToggle
 import com.calvinmazhindu.skitcam.ui.camera.PhotoControls
+import com.calvinmazhindu.skitcam.ui.camera.FinishConfirmationViewModel
 import com.calvinmazhindu.skitcam.ui.camera.blockPreviewInput
 import com.calvinmazhindu.skitcam.ui.components.SkitCamMessagePanel
+import com.calvinmazhindu.skitcam.ui.components.SkitCamConfirmation
+import com.calvinmazhindu.skitcam.ui.components.SkitCamPrimaryButton
+import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme
 import com.calvinmazhindu.skitcam.photo.PhotoModel
@@ -69,6 +73,8 @@ import com.calvinmazhindu.skitcam.playback.SkitPlaybackScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.calvinmazhindu.skitcam.arrange.InlineReorderViewModel
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import com.calvinmazhindu.skitcam.audio.AudioWarning
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamSpacing
 
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
 
@@ -81,6 +87,7 @@ class MainActivity : ComponentActivity() {
     val reviewController: SegmentReviewController by lazy { SegmentReviewController(applicationContext) }
     val trimModel: TrimViewModel by lazy { ViewModelProvider(this)[TrimViewModel::class.java] }
     val inlineReorderModel: InlineReorderViewModel by lazy { ViewModelProvider(this)[InlineReorderViewModel::class.java] }
+    val finishConfirmation: FinishConfirmationViewModel by lazy { ViewModelProvider(this)[FinishConfirmationViewModel::class.java] }
     val orientation: CameraOrientationController by lazy { CameraOrientationController(this) }
     val playback: SkitPlaybackController by lazy { SkitPlaybackController(applicationContext) }
     private val beforeCapture: (Int) -> Unit = { degrees ->
@@ -152,6 +159,8 @@ internal fun MainActivity.CameraScreen() {
     val snackbars = remember { SnackbarHostState() }
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
+    val finishUi = finishConfirmation
+    LaunchedEffect(snapshot.session?.id, snapshot.state) { finishUi.validate(snapshot) }
     LaunchedEffect(recovered) {
         if (recovered) inlineReorder.restore(recordingModel.snapshots.value.session)
     }
@@ -260,7 +269,8 @@ internal fun MainActivity.CameraScreen() {
     var settings by rememberSaveable { mutableStateOf(false) }
     var photoRatioMenu by remember { mutableStateOf(false) }
     val blocked = snapshot.state in setOf(RecordingState.Starting,RecordingState.Finalising,RecordingState.Stopping)
-    val editors = inlineReorder.draft != null || trimModel.segment != null || review.selection != null || finishing
+    val editors = inlineReorder.draft != null || trimModel.segment != null || review.selection != null || finishing ||
+        finishUi.sessionId != null
     val adjustments = !blocked && !editors && !photos.busy && camera.streaming
     LaunchedEffect(editors, blocked) { if(editors || blocked) { quick = false; settings = false } }
     LaunchedEffect(photo,photos.busy,quick,settings,editors,blocked) {
@@ -390,6 +400,22 @@ internal fun MainActivity.CameraScreen() {
                 audio=recordingModel.audio.takeIf { review.selection==null },
                 modifier=Modifier.onSizeChanged { headerHeight = it.height }
             )
+            // Warnings overlay the preview instead of enlarging the measured header;
+            // header height positions the capture frame and must stay constant.
+            if (!photo && !finishing && headerHeight > 0) {
+                recordingModel.audio.takeIf { review.selection==null }?.let { audio ->
+                    AudioWarning(
+                        audio,
+                        Modifier.align(Alignment.TopCenter)
+                            .padding(top = with(density) { headerHeight.toDp() },
+                                start = SkitCamSpacing.lg,
+                                end = if (landscape) dockWidth + SkitCamSpacing.sm else SkitCamSpacing.lg)
+                            .then(if (landscape || fullPhoto) Modifier.blockPreviewInput() else Modifier)
+                            .background(SkitCamColors.Ink.copy(alpha = .9f), MaterialTheme.shapes.small)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
         }
         if (!photo && !finishing && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
@@ -453,8 +479,14 @@ internal fun MainActivity.CameraScreen() {
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
                  beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close() },
-                 navigate = ::navigateReorder,
-                 onBackground = { playback.close(); review.close() })
+                  navigate = ::navigateReorder,
+                  finishEnabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy ||
+                      inlineReorder.saving || inlineReorder.recovering || review.saving || trimModel.saving),
+                  onFinish = { navigateReorder {
+                      finishUi.request(recordingModel.snapshots.value,
+                          !recordingModel.recovered.value || recordingModel.commandPending.value || ExportJournal.busy)
+                  } },
+                  onBackground = { playback.close(); review.close() })
                 }
                 Box(Modifier.fillMaxWidth().height(20.dp),contentAlignment=Alignment.Center) {
                     val inline=camera.message ?: camera.focusResult.takeIf { camera.focus!=null }
@@ -467,31 +499,66 @@ internal fun MainActivity.CameraScreen() {
         }
         if(settings && settingsAllowed) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,audio=recordingModel.audio) { settings=false }
         if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
-        if (reorderNavigation != null) {
-            AlertDialog(
-                onDismissRequest = { if (!inlineReorder.saving) reorderNavigation = null },
-                title = { Text("Finish reordering?") },
-                text = { Column {
-                    Text("Done saves the new order. Cancel changes restores the saved order.")
-                    inlineReorder.error?.let { Text(it) }
-                } },
-                confirmButton = {
-                    TextButton(enabled = reorderEligible && !inlineReorder.saving,
-                        onClick = {
-                            val action = reorderNavigation
-                            inlineReorder.done(recordingModel) { reorderNavigation = null; action?.invoke() }
-                        }) { Text("Done and continue") }
-                },
-                dismissButton = {
-                    FlowRow {
-                        TextButton(enabled = !inlineReorder.saving, onClick = {
-                            val action = reorderNavigation
-                            inlineReorder.cancel(); reorderNavigation = null; action?.invoke()
-                        }) { Text("Cancel changes") }
-                        TextButton(enabled = !inlineReorder.saving,
-                            onClick = { reorderNavigation = null }) { Text("Keep reordering") }
+        if (finishUi.sessionId != null && !finishing) {
+            val active = snapshot.state == RecordingState.Recording
+            val interrupted = snapshot.state == RecordingState.Error
+            val unreadable = interrupted && snapshot.session == null
+            SkitCamConfirmation(
+                title = stringResource(if (unreadable) R.string.acknowledge_error_title else R.string.finish_title),
+                message = stringResource(when {
+                    active -> R.string.finish_active_message
+                    unreadable -> R.string.acknowledge_error_message
+                    interrupted -> R.string.finish_error_message
+                    else -> R.string.finish_message
+                }),
+                onDismiss = finishUi::cancel
+            ) {
+                SkitCamPrimaryButton(
+                    text = stringResource(if (interrupted) R.string.finish_recording else R.string.finish_export),
+                    enabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy ||
+                        inlineReorder.draft != null || inlineReorder.saving || review.saving || trimModel.saving),
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        if (finishUi.consume(recordingModel.snapshots.value,
+                                !recordingModel.recovered.value || recordingModel.commandPending.value ||
+                                    ExportJournal.busy || inlineReorder.draft != null || inlineReorder.saving ||
+                                    review.saving || trimModel.saving)) {
+                            val tap = android.os.SystemClock.elapsedRealtimeNanos()
+                            camera.dismissSavedNotice(); playback.close(); trimModel.close(); review.close()
+                            recordingModel.stop("ui-confirmed", tap)
+                        }
                     }
-                })
+                )
+                SkitCamSecondaryButton(
+                    stringResource(when {
+                        active -> R.string.continue_recording
+                        interrupted -> R.string.cancel_action
+                        else -> R.string.keep_editing
+                    }),
+                    finishUi::cancel, Modifier.fillMaxWidth())
+            }
+        }
+        if (reorderNavigation != null) {
+            SkitCamConfirmation(
+                title = "Finish reordering?",
+                message = "Done saves the new order. Cancel changes restores the saved order.",
+                onDismiss = { if (!inlineReorder.saving) reorderNavigation = null }
+            ) {
+                inlineReorder.error?.let { Text(it, color = SkitCamColors.Error) }
+                SkitCamPrimaryButton("Done and continue", modifier = Modifier.fillMaxWidth(),
+                    enabled = reorderEligible && !inlineReorder.saving,
+                    onClick = {
+                        val action = reorderNavigation
+                        inlineReorder.done(recordingModel) { reorderNavigation = null; action?.invoke() }
+                    })
+                SkitCamSecondaryButton("Cancel changes", modifier = Modifier.fillMaxWidth(),
+                    enabled = !inlineReorder.saving, onClick = {
+                        val action = reorderNavigation
+                        inlineReorder.cancel(); reorderNavigation = null; action?.invoke()
+                    })
+                SkitCamSecondaryButton("Keep reordering", modifier = Modifier.fillMaxWidth(),
+                    enabled = !inlineReorder.saving, onClick = { reorderNavigation = null })
+            }
         }
         SnackbarHost(snackbars,Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(
             end=if(landscape) dockWidth else 0.dp,

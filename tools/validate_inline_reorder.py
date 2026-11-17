@@ -20,7 +20,10 @@ def main():
     parser.add_argument("--serial", default="ZY22KJQLTV")
     parser.add_argument("--output", default=".validation/m12f-inline")
     parser.add_argument("--match", default=".*", help="Run only matching case names (regular expression).")
+    parser.add_argument("--package", choices=[PACKAGE, "com.calvinmazhindu.skitcam.m13validation"],
+                        default=PACKAGE, help="Exact isolated validation package; never production.")
     options = parser.parse_args()
+    package = options.package
     output = pathlib.Path(options.output)
     output.mkdir(parents=True, exist_ok=True)
     adb = [options.adb, "-s", options.serial]
@@ -36,7 +39,7 @@ def main():
                          "-e", "count", str(count), "-e", "landscape", str(landscape).lower(),
                          "-e", "font", active_font,
                          "-e", "recover", str(recover).lower(),
-                         f"{PACKAGE}.test/androidx.test.runner.AndroidJUnitRunner"]
+                         f"{package}.test/androidx.test.runner.AndroidJUnitRunner"]
         result = subprocess.run(command, capture_output=True, text=True, timeout=240)
         text = result.stdout + result.stderr
         (output / f"{name}.log").write_text(text)
@@ -70,8 +73,8 @@ def main():
             active_font = original_font
         case("checkpoint-before-death", "checkpointForProcessDeath")
         if re.search(options.match, "checkpoint-after-force-stop"):
-            shell("am", "start", "-W", "-n", f"{PACKAGE}/com.calvinmazhindu.skitcam.MainActivity")
-            shell("am", "force-stop", PACKAGE)
+            shell("am", "start", "-W", "-n", f"{package}/com.calvinmazhindu.skitcam.MainActivity")
+            shell("am", "force-stop", package)
         case("checkpoint-after-force-stop", "recoverAfterProcessDeath", recover=True)
         case("accessible-navigation-save-cancel", "accessibleUnlockAndNavigationSaveDiscard")
         case("resume-after-reorder", "resumeAfterReorderRecordsValidNewSegment")

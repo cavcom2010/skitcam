@@ -25,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
@@ -35,6 +38,10 @@ import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusBanner
 import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusTone
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamTheme
+import com.calvinmazhindu.skitcam.ui.components.SkitCamPrimaryButton
+import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
+import com.calvinmazhindu.skitcam.ui.video.VideoTransportControls
+import com.calvinmazhindu.skitcam.ui.video.rememberVideoPlaybackState
 
 @Composable
 fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
@@ -60,9 +67,10 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
             if(!notificationAsked && !notificationAllowed) {
                 Text(stringResource(R.string.notification_title),style=MaterialTheme.typography.titleMedium,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
                 Text(stringResource(R.string.notification_rationale),style=MaterialTheme.typography.bodyMedium,color=SkitCamColors.TextSecondary,textAlign=androidx.compose.ui.text.style.TextAlign.Center)
-                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                    Button(onClick={ notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text(stringResource(R.string.notification_allow)) }
-                    TextButton(onClick={ notificationAsked=true }) { Text(stringResource(R.string.notification_not_now),color=SkitCamColors.Warm) }
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    SkitCamPrimaryButton(stringResource(R.string.notification_allow),
+                        { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) })
+                    SkitCamSecondaryButton(stringResource(R.string.notification_not_now), { notificationAsked=true })
                 }
             } else if(!notificationAllowed && notificationAsked) {
                 SkitCamStatusBanner(stringResource(R.string.notification_denied),tone=SkitCamStatusTone.Neutral)
@@ -76,19 +84,25 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
                 ExportState.Exporting -> "Finishing video"
                 ExportState.Verifying -> "Checking video"
                 ExportState.Publishing -> "Saving to gallery"
-            },style=MaterialTheme.typography.titleLarge)
+            },style=MaterialTheme.typography.titleLarge,
+                modifier=Modifier.semantics { liveRegion=LiveRegionMode.Polite },
+                textAlign=androidx.compose.ui.text.style.TextAlign.Center)
             if(status.active) CircularProgressIndicator()
             Text(feedback ?: status.message ?: "Your original recordings are preserved.",style=MaterialTheme.typography.bodyMedium)
-            if(status.active && status.state!=ExportState.Publishing) TextButton(colors=ButtonDefaults.textButtonColors(contentColor=Color(0xFFF2D4BC)),onClick={ExportJournal.cancelRequested=true}) { Text("Cancel") }
-            if(status.state in setOf(ExportState.Failed,ExportState.Cancelled)) Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick={retry()}) { Text("Retry") }
-            if(!status.active && status.state!=ExportState.Completed) Button(colors=ButtonDefaults.buttonColors(containerColor=Color(0xFF854C55),contentColor=Color.White),onClick=onNewRecording) { Text("New Recording") }
+            if(status.active && status.state!=ExportState.Publishing)
+                SkitCamSecondaryButton("Cancel export", { ExportJournal.cancelRequested=true })
+            if(status.state in setOf(ExportState.Failed,ExportState.Cancelled))
+                SkitCamPrimaryButton("Retry", { retry() })
+            if(!status.active && status.state!=ExportState.Completed)
+                SkitCamSecondaryButton("New Recording", onNewRecording)
         }
     }
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class FinishedPlaybackActivity : ComponentActivity() {
-    private var player: ExoPlayer?=null
+    private var player: ExoPlayer? by mutableStateOf(null)
+    private var playbackError by mutableStateOf<String?>(null)
     internal val currentPlayer get()=player
     private lateinit var view: PlayerView
     private var resumeAt=0L
@@ -96,7 +110,11 @@ class FinishedPlaybackActivity : ComponentActivity() {
     private var projectAvailable by mutableStateOf(false)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        view=PlayerView(this)
+        view=PlayerView(this).apply {
+            useController=false
+            resizeMode=androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+            contentDescription="Saved video playback"
+        }
         resumeAt=savedInstanceState?.getLong("position") ?: 0L
         resumePlaying=savedInstanceState?.getBoolean("playing") ?: false
         lifecycleScope.launch {
@@ -122,7 +140,27 @@ class FinishedPlaybackActivity : ComponentActivity() {
                             }
                             com.calvinmazhindu.skitcam.camera.CameraIconButton(com.calvinmazhindu.skitcam.camera.CameraIcon.Share,"Share video") { share() }
                         }
-                        AndroidView(factory={view},modifier=Modifier.fillMaxWidth().weight(1f))
+                         playbackError?.let { message ->
+                             SkitCamStatusBanner(message, Modifier.padding(12.dp), SkitCamStatusTone.Error,
+                                 actionLabel="Retry", onAction={
+                                     playbackError=null
+                                     player?.prepare()
+                                 })
+                         }
+                         val playback=rememberVideoPlaybackState(player)
+                         Box(Modifier.fillMaxWidth().weight(1f)) {
+                             AndroidView(factory={view},modifier=Modifier.fillMaxSize())
+                             VideoTransportControls(playback.playing,playback.positionMs,playback.durationMs,
+                                 enabled=player!=null && playbackError==null,
+                                 onPlayPause={
+                                     player?.let {
+                                         if(it.playbackState==androidx.media3.common.Player.STATE_ENDED) it.seekTo(0)
+                                         if(it.isPlaying) it.pause() else it.play()
+                                     }
+                                 },
+                                 onSeek={player?.seekTo(it)}, overlay=true,
+                                 modifier=Modifier.align(Alignment.BottomCenter))
+                         }
                     }
                 }
             }
@@ -137,8 +175,7 @@ class FinishedPlaybackActivity : ComponentActivity() {
             it.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     android.util.Log.e("SkitCamPlayback", "Finished video playback failed", error)
-                    android.widget.Toast.makeText(this@FinishedPlaybackActivity,"Finished video is unavailable. Original recordings are preserved.",android.widget.Toast.LENGTH_LONG).show()
-                    finish()
+                     playbackError="Finished video is unavailable. Original recordings are preserved."
                 }
             })
             it.setMediaItem(MediaItem.fromUri(uri));it.seekTo(resumeAt);it.playWhenReady=resumePlaying;it.prepare()

@@ -118,7 +118,7 @@ fun CameraTools(model: CameraModel, full: Boolean, adjustmentsEnabled: Boolean, 
                         Slider(value=model.exposure.toFloat(),onValueChange={model.adjustExposure(it.roundToInt())},
                             valueRange=model.exposureRange.first.toFloat()..model.exposureRange.last.toFloat(),enabled=adjustmentsEnabled,
                             steps=(model.exposureRange.last-model.exposureRange.first-1).coerceIn(0,100),modifier=Modifier.semantics { contentDescription="Exposure compensation" })
-                        if(full) Row {
+                        if(full) FlowRow {
                             TextButton(onClick={model.adjustExposure(model.exposure-1)},enabled=adjustmentsEnabled) { Text("− EV") }
                             TextButton(onClick={model.adjustExposure(0)},enabled=adjustmentsEnabled) { Text("Reset EV") }
                             TextButton(onClick={model.adjustExposure(model.exposure+1)},enabled=adjustmentsEnabled) { Text("+ EV") }

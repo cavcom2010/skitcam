@@ -37,9 +37,15 @@ class CameraUxDeviceTest {
         assertTrue("$label: ${ExportJournal.status.value}, ${model.snapshots.value.state}, ${camera.message}",condition())
     }
     private fun find(label: String, prefix: Boolean=false): AccessibilityNodeInfo? {
+        val description = when (label) {
+            "Stop recording" -> "Finish skit"
+            "Discard" -> "Discard segment"
+            "Restore" -> "Restore segment"
+            else -> label
+        }
         if(android.os.Build.VERSION.SDK_INT>=33) inst.uiAutomation.clearCache()
         fun walk(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-            if(node.isVisibleToUser && (if(prefix) node.contentDescription?.toString()?.startsWith(label)==true else (node.text?.toString()==label || node.contentDescription?.toString()==label))) return node
+            if(node.isVisibleToUser && (if(prefix) node.contentDescription?.toString()?.startsWith(description)==true else (node.text?.toString()==label || node.contentDescription?.toString()==description))) return node
             for(i in 0 until node.childCount) node.getChild(i)?.let { walk(it)?.let { found->return found } }
             return null
         }
@@ -50,9 +56,10 @@ class CameraUxDeviceTest {
         await("$label visible") { node=find(label,prefix);node!=null }
         while(node?.isClickable!=true && node?.parent!=null) node=node?.parent
         assertTrue("$label clickable",node!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        if (label == "Stop recording") click("Finish and export")
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation")))) { "Use an isolated validation app" }
+        check(context.packageName == "com.calvinmazhindu.skitcam.m13reviewstablevalidation" || context.packageName == "com.calvinmazhindu.skitcam.m13reviewvalidation" || context.packageName == "com.calvinmazhindu.skitcam.m13validation" || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m12bvalidation") || (context.packageName.endsWith(".m10validation") || (context.packageName.endsWith(".framingvalidation") || context.packageName.endsWith(".m12cvalidation") || context.packageName.endsWith(".m11validation")))) { "Use an isolated validation app" }
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant ${context.packageName} $p")
         rotation=shell("wm user-rotation");shell("wm user-rotation lock 0")
         scenario=ActivityScenario.launch(MainActivity::class.java)
@@ -229,16 +236,18 @@ class CameraUxDeviceTest {
         shot("immersive-idle-portrait")
         record();model.pause();await("paused") { model.snapshots.value.state==RecordingState.Paused }
         val resume=target("Resume recording");val stop=target("Stop recording")
-        val arrange=target("Arrange")
         assertFalse(android.graphics.Rect.intersects(resume,stop))
-        assertFalse(android.graphics.Rect.intersects(stop,arrange))
+        assertNull("Standalone Arrange remains removed",find("Arrange"))
         var thumbnail: AccessibilityNodeInfo?=null
         await("thumbnail") { thumbnail=find("Review segment 1,",prefix=true);thumbnail!=null }
         val thumb=android.graphics.Rect();thumbnail!!.getBoundsInScreen(thumb)
         assertTrue("Thumbnail must stay above dock",thumb.bottom<=resume.top)
         shot("immersive-paused-portrait")
         click("Review segment 1,",prefix=true)
-        await("review visible") { find("Trim timeline")!=null && find("Discard")!=null && find("Close")!=null && find("Keep")==null }
+        await("review visible") { find("Trim timeline")!=null && find("More actions for segment 1")!=null &&
+            find("Close")!=null && find("Keep")==null }
+        assertNull("No lower discard control",find("Discard"))
+        assertNull("No lower skit-play control",find("Play from here"))
         await("review player ready: ${activity.reviewController.error}") {
             var ready=false
             inst.runOnMainSync { ready=activity.reviewController.player?.playbackState==androidx.media3.common.Player.STATE_READY }
@@ -247,7 +256,7 @@ class CameraUxDeviceTest {
         assertNull("Capture dock hidden during review",find("Resume recording"))
         assertNull("Capture dock hidden during review",find("Stop recording"))
         assertNull("Camera header hidden during review",find("Settings"))
-        val reviewRects=listOf("Discard","Close").map { it to target(it) }
+        val reviewRects=listOf("More actions for segment 1","Close").map { it to target(it) }
         for((first,rect) in reviewRects) for((second,other) in reviewRects) if(first<second)
             assertFalse("$first collides with $second",android.graphics.Rect.intersects(rect,other))
         await("review shelf preserved") { find("Review segment 1,",prefix=true)!=null }

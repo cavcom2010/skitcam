@@ -15,9 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -78,6 +76,22 @@ fun VideoTrimBar(
         fun x(ms: Long) = (ms.toDouble() / source * widthPx).toFloat()
         fun xDp(ms: Long) = (ms.toDouble() / source * width.value).toFloat().dp
         fun sourceAt(px: Float) = (px / widthPx * source).toLong().coerceIn(0L, source)
+        // Gesture values are read through updated state: keying pointerInput to the
+        // trim range would cancel the drag on its own first update.
+        val latestStart by rememberUpdatedState(start)
+        val latestEnd by rememberUpdatedState(end)
+        val latestPlay by rememberUpdatedState(play)
+        val latestSpan by rememberUpdatedState(source)
+        val latestWidthPx by rememberUpdatedState(widthPx)
+        val latestFrame by rememberUpdatedState(frameStepMs.coerceAtLeast(1L))
+        val latestSeek by rememberUpdatedState(onSeek)
+        val latestTrimStart by rememberUpdatedState(onTrimStart)
+        val latestTrimEnd by rememberUpdatedState(onTrimEnd)
+        val latestDragStart by rememberUpdatedState(onDragStart)
+        val latestDragEnd by rememberUpdatedState(onDragEnd)
+        val grabPx = with(LocalDensity.current) { 24.dp.toPx() }
+        val snapPx = with(LocalDensity.current) { 10.dp.toPx() }
+        fun edgeX(value: Long) = value.toDouble() / latestSpan * latestWidthPx
 
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Box(Modifier.fillMaxWidth().height(30.dp).alpha(if (enabled) 1f else 0.55f)
@@ -110,23 +124,6 @@ fun VideoTrimBar(
             }
         }
 
-        if (enabled) {
-            Box(Modifier.fillMaxSize().pointerInput(source, start, end) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    onSeek(sourceAt(down.position.x).coerceIn(start, end))
-                    down.consume()
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        onSeek(sourceAt(change.position.x).coerceIn(start, end))
-                        change.consume()
-                    }
-                }
-            })
-        }
-
         TrimEdgeHandle(
             centerX = xDp(start),
             timelineWidth = width,
@@ -136,9 +133,7 @@ fun VideoTrimBar(
             description = "Trim start handle",
             frameStepMs = frameStepMs,
             stepDirection = 1L,
-            onChange = onTrimStart,
-            onDragStart = onDragStart,
-            onDragEnd = onDragEnd
+            onChange = onTrimStart
         )
         TrimEdgeHandle(
             centerX = xDp(end),
@@ -149,10 +144,88 @@ fun VideoTrimBar(
             description = "Trim end handle",
             frameStepMs = frameStepMs,
             stepDirection = -1L,
-            onChange = onTrimEnd,
-            onDragStart = onDragStart,
-            onDragEnd = onDragEnd
+            onChange = onTrimEnd
         )
+
+        if (enabled) {
+            // One full-width gesture surface. Dragging maps the finger's absolute
+            // position to time instead of accumulating deltas, so a grip moving
+            // under the finger cannot feed back into its own measurement.
+            Box(Modifier.fillMaxSize().pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    // Hit-test the visible 48dp boxes, which are clamped inside the
+                    // timeline; a grip at 0ms sits half a target inward.
+                    val startLeft = (edgeX(latestStart).toFloat() - grabPx)
+                        .coerceIn(0f, (latestWidthPx - 2 * grabPx).coerceAtLeast(0f))
+                    val endLeft = (edgeX(latestEnd).toFloat() - grabPx)
+                        .coerceIn(0f, (latestWidthPx - 2 * grabPx).coerceAtLeast(0f))
+                    val startCenter = startLeft + grabPx
+                    val endCenter = endLeft + grabPx
+                    val x0 = down.position.x
+                    val startHit = abs(x0 - startCenter) <= grabPx
+                    val endHit = abs(x0 - endCenter) <= grabPx
+                    val trimming = startHit || endHit
+                    val startEdge = startHit &&
+                        (!endHit || abs(x0 - startCenter) <= abs(x0 - endCenter))
+                    down.consume()
+                    if (!trimming) {
+                        latestSeek(sourceAt(down.position.x).coerceIn(latestStart, latestEnd))
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) { change.consume(); break }
+                            latestSeek(sourceAt(change.position.x).coerceIn(latestStart, latestEnd))
+                            change.consume()
+                        }
+                        return@awaitEachGesture
+                    }
+                    var dragging = false
+                    var snapped = false
+                    var travelled = 0f
+                    var lastX = down.position.x
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) { change.consume(); break }
+                        travelled += abs(change.position.x - lastX)
+                        lastX = change.position.x
+                        if (!dragging && travelled > viewConfiguration.touchSlop) {
+                            dragging = true
+                            latestDragStart()
+                        }
+                        if (dragging) {
+                            val retained = minOf(500L, latestSpan)
+                            val playX = edgeX(latestPlay)
+                            val thresholdPx = snapPx * if (snapped) 2f else 1f
+                            val canSnap = if (startEdge) latestPlay <= latestEnd - retained
+                                else latestPlay >= latestStart + retained
+                            val raw = sourceAt(change.position.x)
+                            // Snap to the playhead within 10dp; stay snapped until the
+                            // finger leaves twice that distance, so the grip does not flicker.
+                            snapped = canSnap && abs(change.position.x - playX) <= thresholdPx
+                            val target = if (snapped) latestPlay else raw
+                            val value = snapToFrame(target, latestFrame).coerceIn(0L, latestSpan)
+                            if (startEdge) latestTrimStart(value) else latestTrimEnd(value)
+                        }
+                        change.consume()
+                    }
+                    if (dragging) {
+                        latestDragEnd()
+                    } else {
+                        // A tap on a grip nudges that boundary inward by one frame.
+                        val base = if (startEdge) latestStart else latestEnd
+                        val stepped = (base + if (startEdge) latestFrame else -latestFrame)
+                            .coerceIn(0L, latestSpan)
+                        if (stepped != base) {
+                            latestDragStart()
+                            if (startEdge) latestTrimStart(stepped) else latestTrimEnd(stepped)
+                            latestDragEnd()
+                        }
+                    }
+                }
+            })
+        }
     }
 }
 
@@ -209,76 +282,25 @@ private fun TrimEdgeHandle(
     description: String,
     frameStepMs: Long,
     stepDirection: Long,
-    onChange: (Long) -> Unit,
-    onDragStart: () -> Unit,
-    onDragEnd: () -> Unit
+    onChange: (Long) -> Unit
 ) {
-    val latestValue by rememberUpdatedState(value)
-    val latestChange by rememberUpdatedState(onChange)
-    val latestStart by rememberUpdatedState(onDragStart)
-    val latestEnd by rememberUpdatedState(onDragEnd)
-    val latestSpan by rememberUpdatedState(span)
-    val latestWidth by rememberUpdatedState(timelineWidth.value)
-    val latestFrame by rememberUpdatedState(frameStepMs.coerceAtLeast(1L))
-    var base by remember { mutableLongStateOf(0L) }
-    var accumulated by remember { mutableFloatStateOf(0f) }
     val offset = (centerX - 24.dp).coerceIn(0.dp, (timelineWidth - 48.dp).coerceAtLeast(0.dp))
+    // Visual/semantic target only: the timeline's single gesture surface handles
+    // dragging, so this 48dp node is never moved mid-gesture.
     Box(
         Modifier.offset(x = offset).width(48.dp).fillMaxHeight()
             .semantics {
                 contentDescription = description
-                stateDescription = "${formatPreciseTime(latestValue)}. Tap to step " +
+                stateDescription = "${formatPreciseTime(value)}. Tap to step " +
                     "${if (stepDirection > 0) "later" else "earlier"} one frame; drag to adjust."
                 customActions = listOf(
                     CustomAccessibilityAction("Move earlier one frame") {
-                        latestChange((latestValue - latestFrame).coerceAtLeast(0)); latestEnd(); true
+                        onChange((value - frameStepMs).coerceAtLeast(0)); true
                     },
                     CustomAccessibilityAction("Move later one frame") {
-                        latestChange((latestValue + latestFrame).coerceIn(0L, latestSpan)); latestEnd(); true
+                        onChange((value + frameStepMs).coerceIn(0L, span)); true
                     }
                 )
-            }
-            .pointerInput(enabled, description, stepDirection) {
-                if (!enabled) return@pointerInput
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    var dragging = false
-                    var total = 0f
-                    var lastX = down.position.x
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) { change.consume(); break }
-                        val dx = change.position.x - lastX
-                        lastX = change.position.x
-                        total += dx
-                        if (!dragging && abs(total) > viewConfiguration.touchSlop) {
-                            dragging = true
-                            base = latestValue
-                            accumulated = 0f
-                            latestStart()
-                        } else if (dragging) {
-                            accumulated += dx
-                            if (latestWidth > 0f) {
-                                val delta = (accumulated / latestWidth * latestSpan).toLong()
-                                val raw = (base + delta).coerceIn(0L, latestSpan)
-                                latestChange(snapToFrame(raw, latestFrame).coerceIn(0L, latestSpan))
-                            }
-                        }
-                        change.consume()
-                    }
-                    if (dragging) {
-                        latestEnd()
-                    } else {
-                        // Tapping is an edit: pause before capturing the playhead, then
-                        // step only the selected boundary.
-                        latestStart()
-                        val stepped = (latestValue + stepDirection * latestFrame).coerceIn(0L, latestSpan)
-                        if (stepped != latestValue) latestChange(stepped)
-                        latestEnd()
-                    }
-                }
             }
     )
 }

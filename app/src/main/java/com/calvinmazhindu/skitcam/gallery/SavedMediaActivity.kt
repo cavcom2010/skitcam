@@ -31,6 +31,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.calvinmazhindu.skitcam.camera.*
 import com.calvinmazhindu.skitcam.export.FinishedPlaybackActivity
+import com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.R
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,10 +87,12 @@ class SavedMediaActivity : ComponentActivity() {
             Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {
                 CameraIconButton(CameraIcon.Back,"Back to camera") { finish() }
                 Text("Gallery",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
-                TextButton(onClick={revision++},enabled=!loading) { Text("Refresh") }
+                SkitCamIconAction(CameraIcon.Reset, stringResource(R.string.refresh_gallery),
+                    onClick={revision++}, enabled=!loading)
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                GalleryFilter.entries.forEach { option -> FilterChip(selected=filter==option,onClick={filter=option},label={Text(option.name,maxLines=1)}) }
+            FlowRow(Modifier.fillMaxWidth().padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                GalleryFilter.entries.forEach { option -> FilterChip(selected=filter==option,onClick={filter=option},
+                    modifier=Modifier.heightIn(min=48.dp),label={Text(option.name)}) }
             }
             if(!loading && error==null && permitted()) Text("${entries.count { it.video }} videos · ${entries.count { !it.video }} photos saved with SkitCam",
                 Modifier.padding(horizontal=16.dp,vertical=4.dp),style=MaterialTheme.typography.labelMedium)
@@ -96,6 +102,8 @@ class SavedMediaActivity : ComponentActivity() {
             if(!loading && shown.isEmpty() && error==null && permitted()) Text("No saved ${if(filter==GalleryFilter.Videos) "videos" else if(filter==GalleryFilter.Photos) "photos" else "media"} found.",Modifier.padding(16.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth().semantics { contentDescription="Saved media list" },contentPadding=PaddingValues(8.dp)) {
                 items(shown,key={it.uri}) { item ->
+                    Surface(color=SkitCamColors.Surface,shape=MaterialTheme.shapes.medium,
+                        modifier=Modifier.padding(bottom=6.dp)) {
                     Row(Modifier.fillMaxWidth().heightIn(min=80.dp).clickable(enabled=!opening) { open(item.uri.toUri(),item.mimeType) }
                         .semantics { contentDescription="Open ${if(item.video) "video" else "photo"} ${item.name}" }
                         .padding(8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
@@ -105,6 +113,7 @@ class SavedMediaActivity : ComponentActivity() {
                             val date=if(item.addedAtSeconds in 1..Long.MAX_VALUE/1000) DateFormat.getDateTimeInstance(DateFormat.MEDIUM,DateFormat.SHORT).format(Date(item.addedAtSeconds*1000)) else "Date unavailable"
                             Text("${if(item.video) "Video" else "Photo"} · $date",style=MaterialTheme.typography.labelSmall)
                         }
+                    }
                     }
                 }
             }

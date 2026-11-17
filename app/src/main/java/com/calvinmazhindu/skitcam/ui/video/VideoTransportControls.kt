@@ -39,14 +39,17 @@ fun VideoTransportControls(
     seekContentDescription: String = "Seek video playback",
     progressContent: (@Composable (Modifier) -> Unit)? = null,
     progressOnOwnRow: Boolean = false,
-    showTime: Boolean = true
+    showTime: Boolean = true,
+    additionalActions: (@Composable () -> Unit)? = null,
+    leadingActions: (@Composable () -> Unit)? = null
 ) {
     BoxWithConstraints(
         modifier.fillMaxWidth()
             .then(if (overlay) Modifier.background(Color.Black.copy(alpha = 0.62f)) else Modifier)
             .padding(horizontal = 8.dp, vertical = 2.dp)
     ) {
-        val stacked = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.5f || progressOnOwnRow
+        val stacked = maxWidth < 320.dp || LocalDensity.current.fontScale > 1.5f ||
+            progressOnOwnRow || additionalActions != null
         val veryNarrow = maxWidth < 220.dp
         @Composable
         fun buttons() {
@@ -115,7 +118,9 @@ fun VideoTransportControls(
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    leadingActions?.invoke()
                     buttons()
+                    additionalActions?.invoke()
                     Spacer(Modifier.weight(1f))
                     if (showTime && !veryNarrow) timeLabel()
                 }
@@ -127,6 +132,7 @@ fun VideoTransportControls(
         } else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                leadingActions?.invoke()
                 buttons()
                 if (showProgress) progress(Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
                 if (showTime) timeLabel()

@@ -46,7 +46,9 @@ class AudioMonitor(private val context: Context, private val onInputChange: (Str
     }
     fun begin(id: String) {
         attempt = id; inputChangeReported = false
-        mutable.value = mutable.value.copy(health = CaptureHealth.Unavailable, peak = null, sampledAt = null,
+        // Startup is not a capture failure: warnings must not appear (and shift the
+        // preview) before CameraX delivers the first sample.
+        mutable.value = mutable.value.copy(health = CaptureHealth.Preparing, peak = null, sampledAt = null,
             observations = emptyList(), warning = null)
         reconcile();refreshDevices()
         try { observe(manager.activeRecordingConfigurations) } catch(_: RuntimeException) { }

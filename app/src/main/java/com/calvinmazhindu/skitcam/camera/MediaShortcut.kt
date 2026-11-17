@@ -9,6 +9,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.material3.IconButton
@@ -34,7 +35,7 @@ private val thumbnailPermits = Semaphore(2)
 fun MediaShortcut(uri: String?, type: String, enabled: Boolean, onOpen: () -> Unit) {
     IconButton(onClick=onOpen,enabled=enabled,modifier=Modifier.size(48.dp)
         .semantics { contentDescription="Open saved media gallery" }) {
-        SavedMediaThumbnail(uri,type,Modifier.size(48.dp))
+        SavedMediaThumbnail(uri,type,Modifier.size(48.dp).alpha(if (enabled) 1f else .38f))
     }
 }
 
@@ -57,31 +58,12 @@ fun SavedMediaThumbnail(uri: String?, type: String, modifier: Modifier=Modifier)
     }
     Box(modifier,contentAlignment=androidx.compose.ui.Alignment.Center) {
         if(bitmap!=null) Image(bitmap!!.asImageBitmap(),contentDescription=null,modifier=Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).border(1.dp,Color.White.copy(alpha=.6f),RoundedCornerShape(8.dp)),contentScale=ContentScale.Crop)
-        else Canvas(Modifier.size(28.dp)) {
-            val color=Color.LightGray
-            drawRoundRect(color,topLeft=Offset(1.dp.toPx(),3.dp.toPx()),size=Size(26.dp.toPx(),22.dp.toPx()),cornerRadius=CornerRadius(3.dp.toPx()),style=Stroke(2.dp.toPx()))
-            drawCircle(color,2.dp.toPx(),Offset(19.dp.toPx(),9.dp.toPx()))
-            drawLine(color,Offset(4.dp.toPx(),21.dp.toPx()),Offset(11.dp.toPx(),13.dp.toPx()),2.dp.toPx())
-            drawLine(color,Offset(11.dp.toPx(),13.dp.toPx()),Offset(21.dp.toPx(),23.dp.toPx()),2.dp.toPx())
-        }
+        else CameraSymbol(CameraIcon.Gallery, Modifier.size(28.dp), Color.LightGray)
     }
 }
 
 
 @Composable
 fun LensSwitch(front: Boolean, enabled: Boolean, onSwitch: () -> Unit) {
-    IconButton(onClick=onSwitch,enabled=enabled,modifier=Modifier.size(48.dp).semantics {
-        contentDescription="Switch to ${if(front) "rear" else "front"} camera"
-    }) {
-        Canvas(Modifier.size(28.dp)) {
-            val color=if(enabled) Color.White else Color.Gray
-            val stroke=2.dp.toPx()
-            drawRoundRect(color,Offset(1.dp.toPx(),7.dp.toPx()),Size(26.dp.toPx(),18.dp.toPx()),CornerRadius(3.dp.toPx()),style=Stroke(stroke))
-            drawRoundRect(color,Offset(9.dp.toPx(),3.dp.toPx()),Size(10.dp.toPx(),4.dp.toPx()),CornerRadius(1.dp.toPx()),style=Stroke(stroke))
-            drawLine(color,Offset(8.dp.toPx(),13.dp.toPx()),Offset(20.dp.toPx(),13.dp.toPx()),stroke)
-            drawLine(color,Offset(17.dp.toPx(),10.dp.toPx()),Offset(20.dp.toPx(),13.dp.toPx()),stroke)
-            drawLine(color,Offset(8.dp.toPx(),19.dp.toPx()),Offset(20.dp.toPx(),19.dp.toPx()),stroke)
-            drawLine(color,Offset(8.dp.toPx(),19.dp.toPx()),Offset(11.dp.toPx(),22.dp.toPx()),stroke)
-        }
-    }
+    CameraIconButton(CameraIcon.SwitchCamera, "Switch to ${if(front) "rear" else "front"} camera", enabled, onSwitch)
 }

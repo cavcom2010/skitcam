@@ -55,7 +55,12 @@ class TrimViewModel : ViewModel() {
         model.saveTrim(sessionId!!, item, verified, range) { result ->
             if (token == generation) {
                 saving = false
-                if (result.success) baseline = range else error = result.message
+                if (result.success) {
+                    baseline = range
+                    // Keep the snapshot in sync so another in-place save (for example
+                    // after Reset) is not rejected as "the segment changed".
+                    segment = item.copy(trim = range, invalidTrimJson = null)
+                } else error = result.message
                 finished(result)
             }
         }

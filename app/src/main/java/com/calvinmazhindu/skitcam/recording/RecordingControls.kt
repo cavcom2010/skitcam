@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -32,7 +33,7 @@ import com.calvinmazhindu.skitcam.R
 import com.calvinmazhindu.skitcam.camera.CameraIcon
 import com.calvinmazhindu.skitcam.camera.CameraSymbol
 import com.calvinmazhindu.skitcam.ui.camera.CaptureDockRow
-import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
+import com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamSpacing
 import kotlinx.coroutines.delay
@@ -43,7 +44,8 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     showShortcuts: Boolean = false, verticalShutter: Boolean = false, modeSelector: @Composable () -> Unit = {},
     leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
     beforeRecording: () -> Unit = {}, onBackground: () -> Unit = beforeRecording,
-    navigate: (() -> Unit) -> Unit = { it() }) {
+    navigate: (() -> Unit) -> Unit = { it() },
+    onFinish: () -> Unit, finishEnabled: Boolean = true) {
     val snapshot by model.snapshots.collectAsStateWithLifecycle()
     val cameraReady by model.cameraAvailability.collectAsStateWithLifecycle()
     val commandPending by model.commandPending.collectAsStateWithLifecycle()
@@ -86,12 +88,12 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
-    val largeFont = LocalDensity.current.fontScale > 1.5f
     val desiredPose = snapshot.session?.takeIf { snapshot.openSession }?.orientationDegrees
     val poseCorrect = pose != null && (desiredPose == null || pose == desiredPose)
     val matchesPreview = CameraOrientationPolicy.matchesDisplay(pose,orientation.displayRotation) && previewRotation==orientation.displayRotation
     val canStart = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending
-    val canResume = cameraGranted && cameraReady && poseCorrect && matchesPreview && snapshot.count < RecordingEngine.MAX_SEGMENTS
+    val canResume = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending &&
+        snapshot.count < RecordingEngine.MAX_SEGMENTS
     val requestAudio = {
         if (requested && !rationale) {
             activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -109,7 +111,6 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     val finishingClip = stringResource(R.string.finishing_clip)
     val startingCamera = stringResource(R.string.starting_camera)
     val readyToRecord = stringResource(R.string.status_ready_to_record)
-    val stopRecordingLabel = stringResource(R.string.stop_recording)
     val resumeRecordingLabel = stringResource(R.string.resume_recording)
     var announcement by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(snapshot.state) {
@@ -131,15 +132,33 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
         Box(Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp),
             contentAlignment = Alignment.Center) {
             if (fresh) {
-                Text(readyToRecord, color = SkitCamColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
+                Text(if (verticalShutter) stringResource(R.string.camera_ready_short) else readyToRecord, modifier = Modifier
+                    .background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                    .padding(horizontal=8.dp, vertical=2.dp)
+                    .semantics { contentDescription = readyToRecord },
+                    color = SkitCamColors.TextSecondary, style = MaterialTheme.typography.labelSmall,
                     textAlign = TextAlign.Center, maxLines = 1)
             } else {
                 val seconds=snapshot.durationMs/1000
-                val countLabel = "Segment count. %d kept".format(snapshot.count)
-                Text("%02d:%02d · %d kept".format(seconds/60,seconds%60,snapshot.count),color=SkitCamColors.TextPrimary,
+                val time = "%02d:%02d".format(seconds/60,seconds%60)
+                val countLabel = "Segment count. ${snapshot.count} kept. Skit duration $time."
+                if (verticalShutter) {
+                    Row(Modifier.background(SkitCamColors.Ink.copy(alpha=.85f), MaterialTheme.shapes.small)
+                        .padding(horizontal=8.dp, vertical=2.dp).clearAndSetSemantics {
+                            contentDescription=countLabel
+                            liveRegion=LiveRegionMode.Polite
+                        },
+                        verticalAlignment=Alignment.CenterVertically,
+                        horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Text(time, style=MaterialTheme.typography.labelMedium, color=SkitCamColors.TextPrimary)
+                        CameraSymbol(CameraIcon.Check, Modifier.size(14.dp), SkitCamColors.Success)
+                        Text("${snapshot.count}", style=MaterialTheme.typography.labelMedium, color=SkitCamColors.TextPrimary)
+                    }
+                } else Text("$time · ${snapshot.count} kept",color=SkitCamColors.TextPrimary,
                     style=MaterialTheme.typography.titleMedium,textAlign=TextAlign.Center,maxLines=1,
                     overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier=Modifier.semantics {
+                    modifier=Modifier.background(SkitCamColors.Ink.copy(alpha=.85f), MaterialTheme.shapes.small)
+                        .padding(horizontal=8.dp, vertical=2.dp).semantics {
                         contentDescription=countLabel
                         liveRegion=LiveRegionMode.Polite
                     })
@@ -167,34 +186,20 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                     }
                 }
                 RecordingState.Recording -> Shutter(true,stringResource(R.string.pause_recording),CameraIcon.Pause) { model.pause() }
-                RecordingState.Paused -> Button(
-                    onClick={ navigate { releaseReview();if(microphone) model.resume(pose) else requestAudio() } },
-                    enabled=canResume,
-                    shape=CircleShape,
-                    modifier=Modifier.size(SkitCamSpacing.shutter).semantics {
-                        contentDescription=resumeRecordingLabel
-                    },
-                    contentPadding=PaddingValues(0.dp),
-                    colors=ButtonDefaults.buttonColors(
-                        containerColor=SkitCamColors.RoseStrong,
-                        contentColor=Color.White,
-                        disabledContainerColor=SkitCamColors.SurfacePressed,
-                        disabledContentColor=SkitCamColors.TextMuted
-                    )
-                ) {
-                    if (largeFont) CameraSymbol(CameraIcon.Play, Modifier.size(34.dp),
-                        if (canResume) Color.White else SkitCamColors.TextMuted)
-                    else Text("RESUME", style=MaterialTheme.typography.labelMedium, maxLines=1,
-                        softWrap=false, overflow=androidx.compose.ui.text.style.TextOverflow.Clip,
-                        textAlign=TextAlign.Center)
+                RecordingState.Paused -> Shutter(canResume, resumeRecordingLabel, CameraIcon.Play) {
+                    navigate { releaseReview();if(microphone) model.resume(pose) else requestAudio() }
                 }
-                else -> CircularProgressIndicator(Modifier.size(36.dp).semantics {
-                    contentDescription = when(snapshot.state) {
-                        RecordingState.Starting -> startingCamera
-                        RecordingState.Finalising, RecordingState.Stopping -> finishingClip
-                        else -> readyToRecord
-                    }
-                })
+                else -> Box(Modifier.size(SkitCamSpacing.shutter), contentAlignment = Alignment.Center) {
+                    // Keep the shutter's footprint; a smaller spinner would shrink the
+                    // dock and visibly move the controls on START.
+                    CircularProgressIndicator(Modifier.size(36.dp).semantics {
+                        contentDescription = when(snapshot.state) {
+                            RecordingState.Starting -> startingCamera
+                            RecordingState.Finalising, RecordingState.Stopping -> finishingClip
+                            else -> readyToRecord
+                        }
+                    })
+                }
             }
         }
         val activeSession = snapshot.state in setOf(RecordingState.Recording,RecordingState.Paused,RecordingState.Error)
@@ -202,28 +207,23 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
         // The landscape rail is too short to keep those dead controls above Finish
         // on tall-aspect displays, so omit them there.
         val compactCaptureRail = verticalShutter && activeSession
+        val finish: @Composable () -> Unit = {
+            SkitCamIconAction(
+                icon = CameraIcon.Stop,
+                label = stringResource(R.string.finish_skit),
+                onClick = onFinish,
+                enabled = finishEnabled,
+                emphasized = true
+            )
+        }
         CaptureDockRow(
             vertical = verticalShutter,
             leading = if (compactCaptureRail) ({}) else leading,
             modeSelector = if (compactCaptureRail) ({}) else modeSelector,
             shutter = primary,
-            trailing = if (compactCaptureRail) ({}) else trailing
+            trailing = if (activeSession) finish else if (snapshot.openSession) ({}) else trailing
         )
-        Box(Modifier.fillMaxWidth().heightIn(min = SkitCamSpacing.touchTarget), contentAlignment = Alignment.Center) {
-            if (activeSession) {
-                val finish: @Composable () -> Unit = {
-                    SkitCamSecondaryButton(
-                        text = stringResource(R.string.finish_recording),
-                        onClick = { navigate { val tap=android.os.SystemClock.elapsedRealtimeNanos();releaseReview();model.stop("ui",tap) } },
-                        enabled = snapshot.state == RecordingState.Recording || !snapshot.unresolved,
-                        modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget).semantics {
-                            contentDescription = stopRecordingLabel
-                        }
-                    )
-                }
-                finish()
-            }
-        }
+        // A stable status slot keeps the shutter/lens-to-Finish position from jumping.
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.TopCenter) {
             val warning = when {
                 snapshot.state == RecordingState.Error -> snapshot.message
@@ -240,11 +240,15 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xxs)) {
                 announcement?.let {
                     Text(it, color = SkitCamColors.Warm, style = MaterialTheme.typography.labelSmall,
-                        textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        textAlign = TextAlign.Center, modifier = Modifier
+                            .background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                            .padding(horizontal=6.dp).semantics { liveRegion = LiveRegionMode.Polite })
                 }
                 warning?.let {
                     Text(it, color = SkitCamColors.Warning, style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                        textAlign = TextAlign.Center, modifier = Modifier
+                            .background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                            .padding(horizontal=6.dp).semantics { liveRegion = LiveRegionMode.Polite })
                 }
             }
         }

@@ -1,12 +1,14 @@
 package com.calvinmazhindu.skitcam.ui.camera
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -40,8 +42,13 @@ fun PhotoControls(
 ) {
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xs)) {
-        Box(Modifier.fillMaxWidth().heightIn(min = 24.dp), contentAlignment = Alignment.Center) {
-            Text(stringResource(R.string.photo_ready), style = MaterialTheme.typography.labelSmall,
+        Box(Modifier.fillMaxWidth().heightIn(min = 28.dp), contentAlignment = Alignment.Center) {
+            val readyLabel = stringResource(R.string.photo_ready)
+            Text(if (landscape) stringResource(R.string.camera_ready_short) else readyLabel, modifier = Modifier
+                .background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                .padding(horizontal=8.dp, vertical=2.dp)
+                .semantics { contentDescription = readyLabel },
+                style = MaterialTheme.typography.labelSmall,
                 color = SkitCamColors.TextSecondary)
         }
         CaptureDockRow(
@@ -51,7 +58,6 @@ fun PhotoControls(
             shutter = { PhotoShutter(canCapture, onCapture) },
             trailing = trailing
         )
-        Box(Modifier.fillMaxWidth().height(SkitCamSpacing.touchTarget))
         Box(
             Modifier.fillMaxWidth().height(SkitCamSpacing.touchTarget),
             contentAlignment = Alignment.TopCenter

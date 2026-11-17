@@ -44,7 +44,10 @@ class ReviewLayoutDeviceTest {
         android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText().trim()
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m12cvalidation")) { "Use the isolated m12c validation app" }
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.m12cvalidation",
+            "com.calvinmazhindu.skitcam.m13validation",
+            "com.calvinmazhindu.skitcam.m13reviewvalidation",
+            "com.calvinmazhindu.skitcam.m13reviewstablevalidation")) { "Use an isolated validation app" }
         for (permission in listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) {
             shell("pm grant ${context.packageName} $permission")
         }
@@ -257,10 +260,11 @@ class ReviewLayoutDeviceTest {
             assertTrue("Portrait trim track must span the safe width: $trimTrack vs $viewport",
                 trimTrack.width() >= viewport.width() * 0.85f)
         }
-        val expectedLabels = listOf("Discard", "Play from here", "Close")
+        val expectedLabels = listOf("Play", "Jump to segment start", "Close", "More actions for segment 1")
         val rects = mutableMapOf<String, Rect>()
         for (control in expectedLabels) {
-            var current = node { it.text?.toString() == control }
+            var current = node { it.text?.toString() == control ||
+                it.contentDescription?.toString() == if (control == "Discard") "Discard segment" else control }
             assertNotNull("Missing $control", current)
             while (!current!!.isClickable && current.parent != null) current = current.parent
             val rect = Rect().also(current::getBoundsInScreen)
@@ -274,6 +278,8 @@ class ReviewLayoutDeviceTest {
         for (first in expectedLabels) for (second in expectedLabels) if (first < second) {
             assertFalse("$first overlaps $second", Rect.intersects(rects.getValue(first), rects.getValue(second)))
         }
+        assertNull("No lower discard button", node { it.contentDescription?.toString() == "Discard segment" })
+        assertNull("No lower skit-play button", node { it.contentDescription?.toString() == "Play from here" })
 
         val viewportArea = viewport.width().toLong() * viewport.height()
         val videoArea = rendered.width().toLong() * rendered.height()

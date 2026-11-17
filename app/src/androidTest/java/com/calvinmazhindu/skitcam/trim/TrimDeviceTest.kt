@@ -47,6 +47,10 @@ class TrimDeviceTest {
         return result.get()
     }
     @Before fun open() {
+        check(context.packageName == "com.calvinmazhindu.skitcam.m13reviewvalidation" ||
+            context.packageName == "com.calvinmazhindu.skitcam.m13reviewstablevalidation" ||
+            context.packageName == "com.calvinmazhindu.skitcam.m13validation" ||
+            context.packageName == "com.calvinmazhindu.skitcam.m12cvalidation") { "Validation package only." }
         for (permission in listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) {
             shell("pm grant ${context.packageName} $permission")
         }
@@ -121,8 +125,32 @@ class TrimDeviceTest {
         while (!n.isClickable && n.parent != null) n = n.parent
         assertTrue(n.performAction(AccessibilityNodeInfo.ACTION_CLICK))
     }
-    private fun text(value: String) = click { it.text?.toString() == value }
+    private fun text(value: String) {
+        if (value in setOf("Discard", "Restore") &&
+            node { it.text?.toString() == "Discard unsaved trim?" } == null) {
+            val order = main {
+                model.snapshots.value.session!!.segments.single { it.id == review.selection!!.segmentId }.order
+            }
+            description("More actions for segment $order")
+            description("$value segment $order")
+            return
+        }
+        click { it.text?.toString() == value || it.contentDescription?.toString() == value }
+    }
     private fun description(value: String) = click { it.contentDescription?.toString() == value }
+    private fun assertPlayFromMenuAvailable(expected: Boolean) {
+        val order = main {
+            model.snapshots.value.session!!.segments.single { it.id == review.selection!!.segmentId }.order
+        }
+        description("More actions for segment $order")
+        await("segment menu") { node { it.contentDescription?.toString() in
+            setOf("Discard segment $order", "Restore segment $order") } != null }
+        val action = node { it.contentDescription?.toString() == "Play from segment $order" }
+        if (expected) assertNotNull("Play from here available after save", action)
+        else assertNull("Unsaved trim blocks Play from here", action)
+        shell("input keyevent 4")
+        await("menu closed") { node { it.contentDescription?.toString() == "More actions for segment $order" } != null }
+    }
     private fun bounds(description: String): Rect {
         await(description) { node { it.contentDescription?.toString() == description } != null }
         return Rect().apply { node { it.contentDescription?.toString() == description }!!.getBoundsInScreen(this) }
@@ -212,7 +240,7 @@ class TrimDeviceTest {
         assertTrue("Drag did not trim: $chosen", chosen.isTrimmed)
         assertTrue("Invalid draft $chosen", chosen.valid())
         assertTrue("Trim must be dirty before save", main { trim.dirty })
-        assertNull("Play from here hidden while trim is dirty", node { it.text?.toString() == "Play from here" })
+        assertPlayFromMenuAvailable(false)
         description("Play")
         await("playing clipped interval") { main { review.player?.isPlaying == true } }
         await("stops at clip end") { main { review.player?.playbackState == Player.STATE_ENDED } }
@@ -221,7 +249,7 @@ class TrimDeviceTest {
         text("Save trim")
         await("trim saved") { main { !trim.dirty && !trim.saving } }
         assertEquals(chosen, model.snapshots.value.session!!.segments[0].trim)
-        assertNotNull("Play from here returns after save", node { it.text?.toString() == "Play from here" })
+        assertPlayFromMenuAvailable(true)
         text("Close")
         await("review closed after save") { main { review.selection == null } }
         openTrim(1)
@@ -291,7 +319,9 @@ class TrimDeviceTest {
         await("dirty prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
         text("Keep editing")
         assertEquals(before, metadata())
-        text("Close"); text("Discard")
+        text("Close")
+        await("discard prompt again") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Discard")
         await("closed") { main { review.selection == null && trim.segment == null } }
         assertEquals(before, metadata())
         model.stop(); state(RecordingState.Completed)
@@ -303,7 +333,7 @@ class TrimDeviceTest {
         main { trim.change(trim.draft!!.start(250)); trim.settled() }
         val draft = main { trim.draft!! }
         assertTrue(main { trim.dirty })
-        assertNull("Play from here stays hidden", node { it.text?.toString() == "Play from here" })
+        assertPlayFromMenuAvailable(false)
         text("Discard"); await("segment discarded") { model.snapshots.value.count == 1 }
         assertFalse(model.snapshots.value.session!!.segments[0].kept)
         assertEquals("Discard must not save the draft trim", before.trim,
@@ -317,7 +347,9 @@ class TrimDeviceTest {
         await("dirty prompt") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
         text("Keep editing"); await("still open") { main { review.selection != null } }
         assertEquals(before.trim, model.snapshots.value.session!!.segments[0].trim)
-        text("Close"); text("Discard")
+        text("Close")
+        await("discard prompt again") { node { it.text?.toString() == "Discard unsaved trim?" } != null }
+        text("Discard")
         await("closed without saving") { main { review.selection == null && trim.segment == null } }
         assertEquals(before.trim, model.snapshots.value.session!!.segments[0].trim)
         model.stop(); state(RecordingState.Completed)

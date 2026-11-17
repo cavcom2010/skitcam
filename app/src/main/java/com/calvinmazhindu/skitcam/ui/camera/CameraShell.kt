@@ -37,7 +37,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -48,7 +47,6 @@ import androidx.compose.ui.unit.dp
 import com.calvinmazhindu.skitcam.R
 import com.calvinmazhindu.skitcam.audio.AudioIndicator
 import com.calvinmazhindu.skitcam.audio.AudioMonitor
-import com.calvinmazhindu.skitcam.audio.AudioWarning
 import com.calvinmazhindu.skitcam.camera.CameraIcon
 import com.calvinmazhindu.skitcam.camera.CameraIconButton
 import com.calvinmazhindu.skitcam.camera.CameraMode
@@ -118,14 +116,6 @@ fun CameraHeader(
             if (!photo && !arranging) audio?.let { AudioIndicator(it) }
             CameraIconButton(CameraIcon.Quick, stringResource(R.string.quick_settings), quickEnabled, onQuick)
         }
-        if (!photo && !arranging) {
-            audio?.let {
-                AudioWarning(
-                    it,
-                    Modifier.padding(start = SkitCamSpacing.lg, end = if (landscape) dockWidth + SkitCamSpacing.sm else SkitCamSpacing.lg)
-                )
-            }
-        }
     }
 }
 
@@ -137,65 +127,19 @@ fun CameraModeToggle(
     modifier: Modifier = Modifier
 ) {
     val photo = selected == CameraMode.Photo
-    val flip by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (photo) 0f else 180f,
-        animationSpec = androidx.compose.animation.core.tween(durationMillis = 340),
-        label = "mode coin flip"
-    )
-    val showPhotoFace = flip > 90f
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val showLabel = density.fontScale <= 1.5f
     val photoLabel = stringResource(R.string.mode_photo)
     val videoLabel = stringResource(R.string.mode_video_short)
     val toggleHint = stringResource(R.string.mode_toggle_hint)
-    Surface(
+    val lockedHint = stringResource(R.string.mode_switch_locked)
+    com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction(
+        icon = if (photo) CameraIcon.Record else CameraIcon.Photo,
+        label = if (photo) videoLabel else photoLabel,
         onClick = { onSelect(if (photo) CameraMode.SkitVideo else CameraMode.Photo) },
         enabled = enabled,
-        shape = CircleShape,
-        color = SkitCamColors.SurfaceRaised,
-        contentColor = SkitCamColors.TextPrimary,
-        border = androidx.compose.foundation.BorderStroke(1.dp, SkitCamColors.Rose.copy(alpha = if (enabled) 0.9f else 0.3f)),
-        modifier = modifier.size(64.dp)
-            .graphicsLayer {
-                rotationY = flip
-                cameraDistance = 14f * density.density
-            }
-            .semantics {
-                contentDescription = if (photo) videoLabel else photoLabel
-                stateDescription = toggleHint
-            }
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            ModeCoinFace(
-                label = if (showLabel) videoLabel else null,
-                icon = CameraIcon.Record,
-                modifier = Modifier.graphicsLayer {
-                    rotationY = 0f
-                    alpha = if (showPhotoFace) 0f else 1f
-                }.clearAndSetSemantics {}
-            )
-            ModeCoinFace(
-                label = if (showLabel) photoLabel else null,
-                icon = CameraIcon.Photo,
-                modifier = Modifier.graphicsLayer {
-                    rotationY = 180f
-                    alpha = if (showPhotoFace) 1f else 0f
-                }.clearAndSetSemantics {}
-            )
+        modifier = modifier.semantics {
+                stateDescription = if (enabled) toggleHint else lockedHint
         }
-    }
-}
-
-@Composable
-private fun ModeCoinFace(label: String?, icon: CameraIcon, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        CameraSymbol(icon, Modifier.size(if (label == null) 30.dp else 24.dp), SkitCamColors.Warm)
-        if (label != null) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = SkitCamColors.TextPrimary,
-                maxLines = 1)
-        }
-    }
+    )
 }
 
 @Composable
@@ -213,21 +157,28 @@ fun CaptureDockRow(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.sm)
         ) {
-            leading()
-            modeSelector()
+            Row(Modifier.fillMaxWidth().heightIn(min = SkitCamSpacing.touchTarget),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically) {
+                leading()
+                modeSelector()
+            }
             shutter()
             trailing()
         }
     } else {
         Row(
             modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            horizontalArrangement = Arrangement.spacedBy(SkitCamSpacing.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            leading()
-            modeSelector()
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                leading()
+                modeSelector()
+            }
             shutter()
-            trailing()
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { trailing() }
         }
     }
 }

@@ -195,8 +195,7 @@ fun SkitCamDialogTitle(title: String, onClose: () -> Unit, modifier: Modifier = 
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge)
-        TextButton(onClick = onClose, modifier = Modifier.heightIn(min = SkitCamSpacing.touchTarget)) {
-            Text("Close", color = SkitCamColors.Warm)
-        }
+        SkitCamIconAction(com.calvinmazhindu.skitcam.camera.CameraIcon.Close,
+            androidx.compose.ui.res.stringResource(com.calvinmazhindu.skitcam.R.string.close), onClose)
     }
 }

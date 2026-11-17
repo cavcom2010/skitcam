@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -46,12 +47,19 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
+import com.calvinmazhindu.skitcam.camera.CameraIcon
+import com.calvinmazhindu.skitcam.camera.CameraSymbol
+import com.calvinmazhindu.skitcam.R
 import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.arrange.InlineReorderViewModel
 import com.calvinmazhindu.skitcam.trim.TrimRange
 import com.calvinmazhindu.skitcam.trim.TrimViewModel
 import com.calvinmazhindu.skitcam.ui.components.SegmentStatusMark
 import com.calvinmazhindu.skitcam.ui.components.segmentStatusColor
+import com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction
+import com.calvinmazhindu.skitcam.ui.components.SkitCamConfirmation
+import com.calvinmazhindu.skitcam.ui.components.SkitCamPrimaryButton
+import com.calvinmazhindu.skitcam.ui.components.SkitCamSecondaryButton
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.video.ImmersiveVideoScaffold
 import com.calvinmazhindu.skitcam.ui.video.VideoScreenHeader
@@ -124,7 +132,6 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     Box(modifier) {
         if (immersiveReview && segment != null) {
             ImmersiveReview(session, segment, model, review, loader, trim,
-                onPlayFrom = playFrom(segment),
                 onDecide = { item, kept -> decide(item, kept) },
                 playFrom = { item -> playFrom(item) },
                 onOpenSegment = { item -> openReview(item) })
@@ -132,10 +139,11 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
             Column(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
                     if (reorder?.draft != null) {
-                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
                             Text(reorder.notice ?: "Reorder unlocked",
-                                Modifier.align(Alignment.CenterVertically).semantics { liveRegion = LiveRegionMode.Polite },
+                                Modifier.weight(1f).background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                                    .padding(6.dp).semantics { liveRegion = LiveRegionMode.Polite },
                                 style = MaterialTheme.typography.labelMedium)
                             TextButton(onClick = { reorder.cancel() }, enabled = !reorder.saving,
                                 modifier = Modifier.heightIn(min = 48.dp)) { Text("Cancel") }
@@ -151,13 +159,11 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         val clipCount = session.segments.size
                         Text("${session.retainedCount} kept · $clipCount ${if (clipCount == 1) "clip" else "clips"}",
-                            Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                        Button(onClick = { onPlayFromBeginning?.invoke() },
-                            enabled = playEnabled && onPlayFromBeginning != null && !review.saving,
-                            modifier = Modifier.heightIn(min = 48.dp)
-                                .semantics { contentDescription = "Play skit from beginning" }) {
-                            Text("Play skit")
-                        }
+                            Modifier.weight(1f).background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
+                                .padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                        SkitCamIconAction(CameraIcon.PlayFromStart, stringResource(R.string.play_skit),
+                            onClick = { onPlayFromBeginning?.invoke() },
+                            enabled = playEnabled && onPlayFromBeginning != null && !review.saving)
                     }
                     if (!playEnabled) Text("No kept clips to play.", style = MaterialTheme.typography.labelSmall)
                 }
@@ -186,7 +192,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                     }
                 } else {
                     Row(Modifier.weight(1f)) {
-                        LazyColumn(Modifier.width(88.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.55f))
+                        LazyColumn(Modifier.width(112.dp).fillMaxHeight().background(Color.Black.copy(alpha = 0.55f))
                             .padding(4.dp).semantics { contentDescription = "Completed segments, vertical strip" },
                             verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(session.segments, key = { it.id }) { item ->
@@ -211,19 +217,27 @@ internal fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbna
     enabled: Boolean, saving: Boolean, onOpen: () -> Unit, onDecide: (Boolean) -> Unit,
     onPlayFrom: (() -> Unit)? = null, reorderPosition: String? = null,
     onUnlock: (() -> Unit)? = null, onMoveUp: (() -> Unit)? = null, onMoveDown: (() -> Unit)? = null,
-    showMenu: Boolean = true, pointerClickEnabled: Boolean = true) {
+    showMenu: Boolean = true, pointerClickEnabled: Boolean = true,
+    selected: Boolean = false, dragging: Boolean = false) {
     val thumbnail by produceState<ThumbnailResult>(ThumbnailResult.Loading, segment.path, enabled) {
         if (enabled) value = loader.load(segment)
     }
     var actions by remember(segment.id) { mutableStateOf(false) }
     val disposition = if (segment.kept) "Kept" else "Discarded"
     val availability = if (thumbnail == ThumbnailResult.Unavailable) ", video unavailable" else ""
-    Box(Modifier.width(if (landscape) 112.dp else 80.dp).heightIn(min = 100.dp)) {
-        Card(modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp)
+    val shape = MaterialTheme.shapes.small
+    // Keep a full 48dp review area beside the separate 48dp overflow target.
+    // Narrower short cards let overflow intercept centre taps and long presses.
+    Box(Modifier.width(if (landscape) 112.dp else 104.dp)
+        .then(if (selected || dragging) Modifier.border(if (dragging) 3.dp else 2.dp,
+            if (dragging) SkitCamColors.Rose else SkitCamColors.Warm, shape) else Modifier)
+        .padding(3.dp)) {
+        Card(modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp)
                 .then(if (pointerClickEnabled) Modifier.clickable(enabled = !saving, onClick = onOpen) else Modifier)
                 .border(1.5.dp, segmentStatusColor(segment.kept), MaterialTheme.shapes.small)
                 .clearAndSetSemantics {
                 contentDescription = "Review segment ${segment.order}, $disposition$availability"
+                this.selected = selected || dragging
                 stateDescription = listOfNotNull(reorderPosition?.let { "Position $it" }, when (thumbnail) {
                     is ThumbnailResult.Ready -> "Thumbnail ready"
                     ThumbnailResult.Loading -> "Loading thumbnail"
@@ -238,39 +252,46 @@ internal fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbna
                     if (onMoveUp != null) add(CustomAccessibilityAction("Move up") { onMoveUp(); true })
                     if (onMoveDown != null) add(CustomAccessibilityAction("Move down") { onMoveDown(); true })
                 }
-            }, colors = CardDefaults.cardColors(containerColor = Color(0xFF25252B), contentColor = Color.White)) {
+            }, colors = CardDefaults.cardColors(
+                containerColor = if (selected) SkitCamColors.SurfacePressed else SkitCamColors.SurfaceRaised,
+                contentColor = SkitCamColors.TextPrimary)) {
             Column(Modifier.padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.fillMaxWidth().height(50.dp).alpha(if (segment.kept) 1f else 0.45f),
+                Box(Modifier.fillMaxWidth().height(50.dp),
                     contentAlignment = Alignment.Center) {
                     when (val frame = thumbnail) {
                         is ThumbnailResult.Ready -> Image(frame.bitmap.asImageBitmap(), null,
-                            Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            Modifier.fillMaxSize().alpha(if (segment.kept) 1f else .45f), contentScale = ContentScale.Crop)
                         ThumbnailResult.Loading -> Text("…", color = Color.White)
                         ThumbnailResult.Unavailable -> Text("Unavailable", color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
-                    SegmentStatusMark(segment.kept, Modifier.align(Alignment.TopEnd))
+                    SegmentStatusMark(segment.kept, Modifier.align(Alignment.BottomStart).padding(2.dp))
                 }
                 Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}", style = MaterialTheme.typography.labelSmall)
             }
         }
         if (showMenu) Box(Modifier.align(Alignment.TopEnd)) {
             IconButton(onClick = { actions = true }, enabled = !saving,
-                modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.45f))
+                modifier = Modifier.size(48.dp)
                     .semantics { contentDescription = "More actions for segment ${segment.order}" }) {
-                Text("⋮", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                CameraSymbol(CameraIcon.More, Modifier.size(28.dp)
+                    .background(SkitCamColors.Ink.copy(alpha=.85f), androidx.compose.foundation.shape.CircleShape)
+                    .padding(4.dp))
             }
             DropdownMenu(expanded = actions, onDismissRequest = { actions = false }) {
                 if (segment.kept) {
                     DropdownMenuItem(text = { Text("Discard") }, enabled = !saving,
+                        leadingIcon = { CameraSymbol(CameraIcon.Delete, color = SkitCamColors.Warning) },
                         modifier = Modifier.semantics { contentDescription = "Discard segment ${segment.order}" },
                         onClick = { actions = false; onDecide(false) })
                 } else {
                     DropdownMenuItem(text = { Text("Restore") }, enabled = !saving,
+                        leadingIcon = { CameraSymbol(CameraIcon.Restore, color = SkitCamColors.Success) },
                         modifier = Modifier.semantics { contentDescription = "Restore segment ${segment.order}" },
                         onClick = { actions = false; onDecide(true) })
                 }
                 if (segment.kept && onPlayFrom != null) {
                     DropdownMenuItem(text = { Text("Play from here") }, enabled = !saving,
+                        leadingIcon = { CameraSymbol(CameraIcon.Play) },
                         modifier = Modifier.semantics { contentDescription = "Play from segment ${segment.order}" },
                         onClick = { actions = false; onPlayFrom() })
                 }
@@ -282,7 +303,7 @@ internal fun ThumbnailCard(segment: Segment, landscape: Boolean, loader: Thumbna
 @Composable
 private fun ImmersiveReview(session: Session, segment: Segment, model: RecordingViewModel,
     review: SegmentReviewController, loader: ThumbnailLoader, trim: TrimViewModel,
-    onPlayFrom: (() -> Unit)?, onDecide: (Segment, Boolean) -> Unit,
+    onDecide: (Segment, Boolean) -> Unit,
     playFrom: (Segment) -> (() -> Unit)?, onOpenSegment: (Segment) -> Unit) {
     val density = LocalDensity.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -294,6 +315,9 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     var pendingSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
     // Keeps the marker steady while ExoPlayer applies a pending seek.
     var heldSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
+    // Absolute source position captured when a trim gesture begins. The marker must
+    // not move while the edge under the finger changes the retained range.
+    var trimAnchor by remember(segment.id) { mutableStateOf<Long?>(null) }
     fun noteSourcePosition(range: TrimRange) {
         val playerPosition = review.player?.currentPosition ?: 0L
         pendingSourcePosition = (range.trimStartMs + playerPosition)
@@ -351,6 +375,7 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             if (target != null) {
                 heldSourcePosition = target.coerceIn(current.trimStartMs, current.trimEndMs)
             }
+            trimAnchor = null
         }
     }
     LaunchedEffect(playback.positionMs, review.player?.playbackState, trim.draft) {
@@ -380,14 +405,28 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
         trim.reset()
     }
     @Composable
+    fun videoMessages(modifier: Modifier = Modifier) {
+        if (trim.error != null || trim.notice != null || trim.saving ||
+            review.error != null || review.saving || review.feedback != null ||
+            (!segment.kept && session.retainedCount >= RecordingEngine.MAX_SEGMENTS)) {
+            Column(modifier.fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.75f)).padding(8.dp)) {
+                trimMessages()
+                ReviewMessages(session, segment, review)
+            }
+        }
+    }
+    @Composable
     fun videoControls(modifier: Modifier = Modifier, progressOnOwnRow: Boolean = false) {
         val activeRange = range?.takeIf { trim.ready }
         val calculatedSource = if (activeRange != null) {
             (activeRange.trimStartMs + playback.positionMs).coerceIn(0L, activeRange.sourceDurationMs)
         } else playback.positionMs
-        val sourcePosition = activeRange?.let { current ->
-            heldSourcePosition?.coerceIn(current.trimStartMs, current.trimEndMs)
-        } ?: calculatedSource
+        val sourcePosition = trimAnchor?.coerceIn(activeRange?.trimStartMs ?: 0L,
+            activeRange?.trimEndMs ?: Long.MAX_VALUE)
+            ?: activeRange?.let { current ->
+                heldSourcePosition?.coerceIn(current.trimStartMs, current.trimEndMs)
+            } ?: calculatedSource
         val trimProgress: (@Composable (Modifier) -> Unit)? = if (activeRange != null) {
             { progressModifier ->
                 VideoTrimBar(
@@ -398,18 +437,30 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     enabled = !trim.saving && trim.error == null,
                     onSeek = { sourceMs ->
                         heldSourcePosition = null
+                        trimAnchor = null
                         review.player?.seekTo((sourceMs - activeRange.trimStartMs).coerceAtLeast(0L))
                     },
                     onTrimStart = { ms ->
-                        noteSourcePosition(activeRange)
+                        // Keep the marker on the source frame the user was watching.
+                        val anchor = trimAnchor
+                        if (anchor != null) pendingSourcePosition =
+                            anchor.coerceIn(activeRange.trimStartMs, activeRange.trimEndMs)
+                        else noteSourcePosition(activeRange)
                         trim.change(activeRange.start(ms))
                     },
                     onTrimEnd = { ms ->
-                        noteSourcePosition(activeRange)
+                        val anchor = trimAnchor
+                        if (anchor != null) pendingSourcePosition =
+                            anchor.coerceIn(activeRange.trimStartMs, activeRange.trimEndMs)
+                        else noteSourcePosition(activeRange)
                         trim.change(activeRange.end(ms))
                     },
                     frameStepMs = frameStepMs,
-                    onDragStart = { review.player?.pause() },
+                    onDragStart = {
+                        review.player?.pause()
+                        // Same source as the drawn marker, so it stays exactly put.
+                        if (trimAnchor == null) trimAnchor = activeRange.trimStartMs + playback.positionMs
+                    },
                     onDragEnd = { trim.settled() },
                     modifier = progressModifier
                 )
@@ -423,10 +474,12 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             onPlayPause = ::togglePlayback,
             onJumpToStart = {
                 heldSourcePosition = null
+                trimAnchor = null
                 review.player?.seekTo(0)
             },
             onSeek = { sourceMs ->
                 heldSourcePosition = null
+                trimAnchor = null
                 val current = trim.draft
                 if (current != null) review.player?.seekTo((sourceMs - current.trimStartMs).coerceAtLeast(0L))
                 else review.player?.seekTo(sourceMs)
@@ -436,6 +489,16 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             progressContent = trimProgress,
             progressOnOwnRow = progressOnOwnRow,
             showTime = false,
+            additionalActions = {
+                // Fixed slots: editing/saving changes availability, never preview geometry.
+                val ready = trim.ready && review.error == null
+                val busy = review.saving || trim.saving
+                SkitCamIconAction(CameraIcon.Check, stringResource(R.string.save_trim),
+                    { trim.saveInPlace(model) },
+                    enabled = trim.dirty && trim.canSave && ready && !busy, emphasized = true)
+                SkitCamIconAction(CameraIcon.Reset, stringResource(R.string.reset_trim), ::resetTrim,
+                    enabled = (trim.dirty || trim.draft?.isTrimmed == true) && ready && !busy)
+            },
             modifier = modifier
         )
     }
@@ -450,12 +513,17 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
         if (wide) {
             val railWidth = minOf(if (density.fontScale > 1.5f) 240.dp else 200.dp, maxWidth * 0.38f)
             Row(Modifier.fillMaxSize()) {
-                VideoSurface(
-                    player = review.player,
-                    aspect = aspect,
-                    contentDescription = "Segment ${segment.order} playback",
-                    modifier = Modifier.weight(1f).fillMaxHeight().padding(6.dp)
-                ) { videoControls(Modifier.align(Alignment.BottomCenter)) }
+                // Controls use the panel width, not a potentially narrow portrait frame.
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    VideoSurface(
+                        player = review.player,
+                        aspect = aspect,
+                        contentDescription = "Segment ${segment.order} playback",
+                        modifier = Modifier.fillMaxSize().padding(6.dp)
+                    )
+                    videoMessages(Modifier.align(Alignment.TopStart))
+                    videoControls(Modifier.align(Alignment.BottomCenter))
+                }
                 Column(Modifier.width(railWidth).fillMaxHeight().padding(end = 4.dp)) {
                     VideoScreenHeader(
                         title = reviewTitle(segment, false),
@@ -465,22 +533,9 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         contentPadding = PaddingValues(bottom = 8.dp)) {
-                        item {
-                            trimMessages()
-                            ReviewActions(session, segment, model, review, false,
-                                onPlayFrom = if (trim.dirty) null else onPlayFrom,
-                                showClose = false,
-                                onSaveTrim = { trim.saveInPlace(model) },
-                                onResetTrim = ::resetTrim,
-                                trimDirty = trim.dirty,
-                                trimSaving = trim.saving,
-                                trimCanSave = trim.canSave,
-                                trimCanReset = trim.draft?.isTrimmed == true,
-                                ready = trim.ready && review.error == null)
-                        }
                         item { Text("Clips", style = MaterialTheme.typography.labelSmall) }
                         items(session.segments, key = { it.id }) { item ->
-                            ReviewThumbnailCard(item, loader, true, review.saving,
+                            ReviewThumbnailCard(item, loader, true, review.saving || trim.saving,
                                 { select(item) }, { onDecide(item, it) }, safePlayFrom(item),
                                 row = true, selected = item.id == segment.id, modifier = Modifier.fillMaxWidth())
                         }
@@ -494,60 +549,42 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     subtitle = reviewSubtitle(segment),
                     onClose = { navigate(closeReview) }
                 )
-                // The fitted 9:16 frame is much narrower than the phone in portrait.
-                // Keep the preview aspect-fit, but let the trim/transport overlay span
-                // the full safe width so handles and the playhead stay easy to target.
+                // Fit the complete video into all available preview space. Transport
+                // and trim handles span the safe width, independently of letterboxing.
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     VideoSurface(
                         player = review.player,
                         aspect = aspect,
                         contentDescription = "Segment ${segment.order} playback",
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp)
+                        modifier = Modifier.fillMaxSize()
                     )
+                    // Status/error text overlays the preview rather than resizing it.
+                    videoMessages(Modifier.align(Alignment.TopStart))
                     videoControls(Modifier.align(Alignment.BottomCenter), progressOnOwnRow = true)
                 }
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
-                    trimMessages()
-                    ReviewActions(session, segment, model, review, false,
-                        onPlayFrom = if (trim.dirty) null else onPlayFrom,
-                        showClose = false,
-                        onSaveTrim = { trim.saveInPlace(model) },
-                        onResetTrim = ::resetTrim,
-                        trimDirty = trim.dirty,
-                        trimSaving = trim.saving,
-                        trimCanSave = trim.canSave,
-                        trimCanReset = trim.draft?.isTrimmed == true,
-                        ready = trim.ready && review.error == null)
-                }
-                ReviewShelfRow(session, segment.id, review, loader, shelfHeight, onDecide, safePlayFrom,
+                ReviewShelfRow(session, segment.id, review.saving || trim.saving, loader, shelfHeight, onDecide, safePlayFrom,
                     onOpen = ::select)
             }
         }
     }
     confirmAction?.let { action ->
-        AlertDialog(
-            onDismissRequest = { confirmAction = null },
-            title = { Text("Discard unsaved trim?") },
-            text = { Text("The changed trim range has not been saved.") },
-            confirmButton = {
-                TextButton(onClick = { confirmAction = null; action() }) { Text("Discard") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmAction = null }) { Text("Keep editing") }
-            }
-        )
+        SkitCamConfirmation("Discard unsaved trim?", "The changed trim range has not been saved.",
+            onDismiss = { confirmAction = null }) {
+            SkitCamPrimaryButton("Keep editing", { confirmAction = null }, Modifier.fillMaxWidth())
+            SkitCamSecondaryButton("Discard", { confirmAction = null; action() }, Modifier.fillMaxWidth())
+        }
     }
 }
 
 @Composable
-private fun ReviewShelfRow(session: Session, selectedId: String, review: SegmentReviewController,
+private fun ReviewShelfRow(session: Session, selectedId: String, saving: Boolean,
     loader: ThumbnailLoader, height: Dp, onDecide: (Segment, Boolean) -> Unit,
     playFrom: (Segment) -> (() -> Unit)?, onOpen: (Segment) -> Unit = {}) {
     LazyRow(Modifier.fillMaxWidth().height(height).background(Color.Black.copy(alpha = 0.55f))
         .padding(4.dp).semantics { contentDescription = "Completed segments, horizontal strip" },
         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         items(session.segments, key = { it.id }) { item ->
-            ReviewThumbnailCard(item, loader, true, review.saving,
+            ReviewThumbnailCard(item, loader, true, saving,
                 { onOpen(item) }, { onDecide(item, it) }, playFrom(item),
                 row = false, selected = item.id == selectedId, modifier = Modifier.fillMaxHeight().width(96.dp))
         }
@@ -596,7 +633,7 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
                     Text("${segment.order} · ${formatClipDuration(segment.displayDurationMs)}",
                         style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
+                Spacer(Modifier.width(48.dp))
             } else {
                 Column(Modifier.fillMaxSize().padding(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -606,7 +643,9 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
                 }
             }
         }
-        if (!row) Box(Modifier.align(Alignment.TopEnd)) {
+        // Keep overflow outside the card's clearAndSetSemantics in both layouts,
+        // so its labelled actions remain discoverable to TalkBack.
+        Box(Modifier.align(if (row) Alignment.CenterEnd else Alignment.TopEnd)) {
             ThumbnailMenu(segment, saving, actions, { actions = true }, { actions = false }, onDecide, onPlayFrom)
         }
     }
@@ -616,7 +655,7 @@ private fun ReviewThumbnailCard(segment: Segment, loader: ThumbnailLoader, enabl
 private fun ThumbnailStatus(thumbnail: ThumbnailResult, kept: Boolean, modifier: Modifier) {
     Box(modifier) {
         ThumbnailFrame(thumbnail, Modifier.fillMaxSize(), dimmed = !kept)
-        SegmentStatusMark(kept, Modifier.align(Alignment.TopEnd))
+        SegmentStatusMark(kept, Modifier.align(Alignment.BottomStart).padding(2.dp))
     }
 }
 
@@ -638,24 +677,31 @@ private fun ThumbnailFrame(thumbnail: ThumbnailResult, modifier: Modifier, dimme
 private fun ThumbnailMenu(segment: Segment, saving: Boolean, expanded: Boolean,
     onExpand: () -> Unit, onDismiss: () -> Unit, onDecide: (Boolean) -> Unit,
     onPlayFrom: (() -> Unit)?) {
+    val discardLabel = stringResource(R.string.discard_segment)
+    val restoreLabel = stringResource(R.string.restore_segment)
     Box {
         IconButton(onClick = onExpand, enabled = !saving,
-            modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.45f))
+            modifier = Modifier.size(48.dp)
                 .semantics { contentDescription = "More actions for segment ${segment.order}" }) {
-            Text("⋮", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            CameraSymbol(CameraIcon.More, Modifier.size(28.dp)
+                .background(SkitCamColors.Ink.copy(alpha=.85f), androidx.compose.foundation.shape.CircleShape)
+                .padding(4.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             if (segment.kept) {
                 DropdownMenuItem(text = { Text("Discard") }, enabled = !saving,
-                    modifier = Modifier.semantics { contentDescription = "Discard segment ${segment.order}" },
+                    leadingIcon = { CameraSymbol(CameraIcon.Delete, color = SkitCamColors.Warning) },
+                    modifier = Modifier.semantics { contentDescription = "$discardLabel ${segment.order}" },
                     onClick = { onDismiss(); onDecide(false) })
             } else {
                 DropdownMenuItem(text = { Text("Restore") }, enabled = !saving,
-                    modifier = Modifier.semantics { contentDescription = "Restore segment ${segment.order}" },
+                    leadingIcon = { CameraSymbol(CameraIcon.Restore, color = SkitCamColors.Success) },
+                    modifier = Modifier.semantics { contentDescription = "$restoreLabel ${segment.order}" },
                     onClick = { onDismiss(); onDecide(true) })
             }
             if (segment.kept && onPlayFrom != null) {
-                DropdownMenuItem(text = { Text("Play from here") }, enabled = !saving,
+                DropdownMenuItem(text = { Text(stringResource(R.string.play_from_here)) }, enabled = !saving,
+                    leadingIcon = { CameraSymbol(CameraIcon.Play) },
                     modifier = Modifier.semantics { contentDescription = "Play from segment ${segment.order}" },
                     onClick = { onDismiss(); onPlayFrom() })
             }
@@ -706,13 +752,10 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                     verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { ReviewHeader(segment, readOnly) }
-                        TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC))) {
-                            Text(if (readOnly) "Back to Arrange" else "Close")
-                        }
+                        SkitCamIconAction(CameraIcon.Close, stringResource(R.string.close), { review.close() })
                     }
                     if (review.player != null) Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
-                    ReviewActions(session, segment, model, review, readOnly, onPlayFrom = onPlayFrom,
+                    ReviewActions(session, segment, review,
                         showClose = false)
                 }
             }
@@ -735,7 +778,7 @@ internal fun ReviewPanel(session: Session, segment: Segment, model: RecordingVie
                     }
                     Text(review.playbackLabel, style = MaterialTheme.typography.labelSmall)
                 } else Spacer(Modifier.weight(1f))
-                ReviewActions(session, segment, model, review, readOnly, onPlayFrom = onPlayFrom)
+                ReviewActions(session, segment, review)
             }
         }
     }
@@ -756,44 +799,14 @@ private fun ReviewHeader(segment: Segment, readOnly: Boolean) {
 }
 
 @Composable
-private fun ReviewActions(session: Session, segment: Segment, model: RecordingViewModel,
-    review: SegmentReviewController, readOnly: Boolean, onPlayFrom: (() -> Unit)?,
-    showClose: Boolean = true, onSaveTrim: (() -> Unit)? = null, onResetTrim: (() -> Unit)? = null,
-    trimDirty: Boolean = false, trimSaving: Boolean = false, trimCanSave: Boolean = false,
-    trimCanReset: Boolean = false, ready: Boolean = true) {
-    val busy = review.saving || trimSaving
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (!readOnly) {
-            if (onSaveTrim != null && trimDirty) Button(onClick = onSaveTrim,
-                enabled = trimCanSave && ready && !busy,
-                modifier = Modifier.heightIn(min = 48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = SkitCamColors.RoseStrong,
-                    contentColor = Color.White),
-                contentPadding = PaddingValues(horizontal = 10.dp)) {
-                Text(if (trimSaving) "Saving…" else "Save trim")
-            }
-            if (onResetTrim != null && (trimDirty || trimCanReset)) TextButton(onClick = onResetTrim,
-                enabled = ready && !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Reset trim") }
-            if (segment.kept) {
-                OutlinedButton(onClick = { review.decide(model, false) }, enabled = !busy,
-                    modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                    border = BorderStroke(1.dp, SkitCamColors.Error.copy(alpha = 0.75f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SkitCamColors.Error),
-                    contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Discard") }
-            } else {
-                Button(onClick = { review.decide(model, true) }, enabled = !busy,
-                    modifier = Modifier.heightIn(min = 48.dp).semantics { selected = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = SkitCamColors.RoseStrong,
-                        contentColor = Color.White),
-                    contentPadding = PaddingValues(horizontal = 10.dp)) { Text("Restore") }
-            }
-            if (segment.kept && onPlayFrom != null) TextButton(onClick = onPlayFrom, enabled = !busy,
-                modifier = Modifier.heightIn(min = 48.dp)) { Text("Play from here") }
-        }
-        if (showClose) TextButton(onClick = { review.close() }, modifier = Modifier.heightIn(min = 48.dp),
-            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFF2D4BC)),
-            contentPadding = PaddingValues(horizontal = 10.dp)) { Text(if (readOnly) "Back to Arrange" else "Close") }
-    }
+private fun ReviewActions(session: Session, segment: Segment,
+    review: SegmentReviewController, showClose: Boolean = true) {
+    if (showClose) SkitCamIconAction(CameraIcon.Close, stringResource(R.string.close), { review.close() })
+    ReviewMessages(session, segment, review)
+}
+
+@Composable
+private fun ReviewMessages(session: Session, segment: Segment, review: SegmentReviewController) {
     if (!segment.kept && session.retainedCount >= RecordingEngine.MAX_SEGMENTS) {
         Text("100 kept segments. Discard another to restore this one.", style = MaterialTheme.typography.bodySmall)
     }

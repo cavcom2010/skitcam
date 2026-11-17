@@ -61,7 +61,9 @@ class InlineReorderDeviceTest {
         assertTrue("Timed out: $message", condition())
     }
     @Before fun open() {
-        check(context.packageName.endsWith(".m12finlinevalidation")) { "Validation package only." }
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.m12finlinevalidation",
+            "com.calvinmazhindu.skitcam.m13validation",
+            "com.calvinmazhindu.skitcam.m13reviewstablevalidation")) { "Validation package only." }
         shell("cmd statusbar collapse")
         originalRotation = shell("wm user-rotation")
         val landscape = args.getString("landscape") == "true"
@@ -153,8 +155,13 @@ class InlineReorderDeviceTest {
         assertTrue(target.performAction(AccessibilityNodeInfo.ACTION_CLICK))
     }
     private fun text(value: String) {
-        await(value) { node { it.text?.toString() == value } != null }
-        click(node { it.text?.toString() == value }!!)
+        val label = when (value) {
+            "Finish" -> "Finish skit"
+            "Play skit" -> "Play skit from beginning"
+            else -> value
+        }
+        await(value) { node { it.text?.toString() == value || it.contentDescription?.toString() == label } != null }
+        click(node { it.text?.toString() == value || it.contentDescription?.toString() == label }!!)
     }
     private fun metadata() = File(context.filesDir, "sessions/${fixture.id}/session.json").readText()
     private fun tap(rect: Rect) {
@@ -328,7 +335,16 @@ class InlineReorderDeviceTest {
         assertTrue("Downward auto-scroll beyond viewport", downIndex >= 4)
         await("selected card at lower insertion position") { card(1) != null }
         shelf = bounds(node { it.contentDescription?.toString() == "Completed segments, vertical strip" }!!)
-        touch(bounds(card(1)!!), shelf.top + 10f, edgeHold = 1800, duringHold = { screenshot("top-edge-drag") })
+        // A compact card can be partly below the viewport after the first drop.
+        // Accessibility bounds may include its off-viewport centre; inject into the
+        // visible portion, as a user would, rather than the capture dock underneath.
+        val visibleCard = bounds(card(1)!!)
+        assertTrue("Selected card must intersect the shelf", visibleCard.intersect(shelf))
+        touch(visibleCard, shelf.top + 10f, edgeHold = 1800, duringHold = {
+            assertEquals("The upward gesture must actually own the selected card",
+                fixture.segments[0].id, main { editor.draggingId })
+            screenshot("top-edge-drag")
+        })
         await("upward drag settled") { main { editor.draggingId == null } }
         assertTrue("Top edge must auto-scroll back beyond the current viewport",
             main { editor.draft!!.ids.indexOf(fixture.segments[0].id) } < downIndex - 3)
@@ -377,6 +393,7 @@ class InlineReorderDeviceTest {
         text("Done")
         await("saved") { main { editor.draft == null } }
         text("Finish")
+        text("Finish and export")
         await("MP4 export", 180_000) {
             ExportJournal.status.value?.let { it.sessionId == fixture.id && !it.active } == true
         }

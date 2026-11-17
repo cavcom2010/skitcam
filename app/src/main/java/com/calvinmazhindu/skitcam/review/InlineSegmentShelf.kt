@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.calvinmazhindu.skitcam.arrange.InlineReorderViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
 import com.calvinmazhindu.skitcam.recording.Session
+import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import kotlinx.coroutines.isActive
 
 /** Pointer input belongs to the viewport, not a lazy item which can be disposed during auto-scroll. */
@@ -46,6 +47,8 @@ internal fun InlineSegmentShelf(session: Session, editor: InlineReorderViewModel
     var pointerY by remember { mutableFloatStateOf(0f) }
     var grabOffset by remember { mutableFloatStateOf(0f) }
     var draggedHeight by remember { mutableIntStateOf(1) }
+    var selectedId by remember(session.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(editor.draft == null) { if (editor.draft == null) selectedId = null }
     val edge = with(LocalDensity.current) { 48.dp.toPx() }
     val speed = with(LocalDensity.current) { 520.dp.toPx() }
     fun unlock() {
@@ -94,7 +97,7 @@ internal fun InlineSegmentShelf(session: Session, editor: InlineReorderViewModel
             }
         }
     }
-    Box(modifier.width(88.dp).fillMaxHeight().clipToBounds().background(Color.Black.copy(alpha = 0.55f))) {
+    Box(modifier.width(112.dp).fillMaxHeight().clipToBounds()) {
         LazyColumn(state = list, userScrollEnabled = editor.draggingId == null, modifier = Modifier.fillMaxSize()
             .semantics { contentDescription = "Completed segments, vertical strip" }
             .pointerInput(editor) {
@@ -122,6 +125,7 @@ internal fun InlineSegmentShelf(session: Session, editor: InlineReorderViewModel
                                     grabOffset = down.position.y - info.offset
                                     draggedHeight = info.size
                                     editor.beginDrag(id)
+                                    selectedId = id
                                     currentEvent.changes.forEach { it.consume() }
                                     val completed = drag(down.id) { change ->
                                         if (currentEligible && editor.draggingId != null) {
@@ -151,13 +155,14 @@ internal fun InlineSegmentShelf(session: Session, editor: InlineReorderViewModel
                             reorderPosition = "${index + 1} of ${ids.size}",
                             onUnlock = if (actionsEnabled && editor.draft == null) ({ unlock() }) else null,
                             onMoveUp = if (actionsEnabled && editor.draft != null && index > 0)
-                                ({ editor.move(id, index - 1) }) else null,
+                                ({ selectedId = id; editor.move(id, index - 1) }) else null,
                             onMoveDown = if (actionsEnabled && editor.draft != null && index < ids.lastIndex)
-                                ({ editor.move(id, index + 1) }) else null,
-                            showMenu = editor.draft == null, pointerClickEnabled = false)
+                                ({ selectedId = id; editor.move(id, index + 1) }) else null,
+                            showMenu = editor.draft == null, pointerClickEnabled = false,
+                            selected = selectedId == id)
                     }
                     if (dragging) Box(Modifier.fillMaxWidth().height(3.dp)
-                        .background(Color(0xFFF2D4BC)).semantics { contentDescription = "Insertion position ${index + 1}" })
+                        .background(SkitCamColors.Warm).semantics { contentDescription = "Insertion position ${index + 1}" })
                 }
             }
         }
@@ -168,7 +173,8 @@ internal fun InlineSegmentShelf(session: Session, editor: InlineReorderViewModel
                 translationY = (pointerY - grabOffset).coerceIn(0f, (height - draggedHeight).coerceAtLeast(0f))
                 shadowElevation = 12.dp.toPx()
             }.clearAndSetSemantics {}) {
-                ThumbnailCard(dragged, false, loader, true, true, {}, {}, showMenu = false, pointerClickEnabled = false)
+                ThumbnailCard(dragged, false, loader, true, true, {}, {}, showMenu = false,
+                    pointerClickEnabled = false, dragging = true)
             }
         }
     }

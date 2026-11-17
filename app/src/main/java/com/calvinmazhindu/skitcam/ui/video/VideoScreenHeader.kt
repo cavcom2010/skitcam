@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
+import com.calvinmazhindu.skitcam.camera.CameraIcon
+import com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction
 
 @Composable
 fun VideoScreenHeader(
@@ -45,15 +47,6 @@ fun VideoScreenHeader(
             }
         }
         actions()
-        TextButton(
-            onClick = onClose,
-            modifier = Modifier.heightIn(min = 48.dp).then(
-                if (closeContentDescription != null)
-                    Modifier.semantics { contentDescription = closeContentDescription }
-                else Modifier
-            ),
-            colors = ButtonDefaults.textButtonColors(contentColor = SkitCamColors.Warm),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp)
-        ) { Text(closeLabel) }
+        SkitCamIconAction(CameraIcon.Close, closeContentDescription ?: closeLabel, onClose)
     }
 }

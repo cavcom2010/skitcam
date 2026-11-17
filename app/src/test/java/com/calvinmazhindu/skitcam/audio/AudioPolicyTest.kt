@@ -44,4 +44,10 @@ class AudioPolicyTest {
         for(state in listOf(CaptureHealth.Muted,CaptureHealth.Silenced,CaptureHealth.Failed,CaptureHealth.Unavailable)) assertTrue(AudioPolicy.captureFailure(state))
         assertEquals(0.0,AudioPolicy.peak(0.0))
     }
+    @Test fun startupIsNotAnAudioFailure() {
+        assertFalse(AudioPolicy.captureFailure(CaptureHealth.Preparing))
+        val preparing=AudioSnapshot(permission=true,health=CaptureHealth.Preparing,peak=.5,sampledAt=1000)
+        assertEquals("Preparing microphone…",preparing.title)
+        assertNull("No meter until a real sample",preparing.visiblePeak(1000))
+    }
 }

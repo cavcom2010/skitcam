@@ -10,9 +10,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.video.*
+import com.calvinmazhindu.skitcam.camera.CameraIcon
+import com.calvinmazhindu.skitcam.ui.components.SkitCamIconAction
 
 @Composable
 fun SkitPlaybackScreen(controller: SkitPlaybackController, modifier: Modifier = Modifier, onClose: () -> Unit) {
@@ -53,23 +57,6 @@ fun SkitPlaybackScreen(controller: SkitPlaybackController, modifier: Modifier = 
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
-                FilterChip(
-                    selected = controller.loop,
-                    onClick = controller::toggleLoop,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
-                        .heightIn(min = 48.dp),
-                    label = {
-                        Text(if (controller.loop) "Loop from clip ${plan?.anchorOrder ?: 1}" else "Loop off",
-                            maxLines = 1)
-                    }
-                )
-                if (controller.finished && controller.player != null) {
-                    TextButton(
-                        onClick = controller::replay,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                            .heightIn(min = 48.dp)
-                    ) { Text("Replay", color = SkitCamColors.Warm) }
-                }
                 VideoTransportControls(
                     playing = playback.playing,
                     positionMs = playback.positionMs,
@@ -79,6 +66,22 @@ fun SkitPlaybackScreen(controller: SkitPlaybackController, modifier: Modifier = 
                     onSeek = controller::seekTo,
                     overlay = true,
                     seekContentDescription = "Seek skit playback",
+                    // Loop and Replay belong with transport, not floating over the video.
+                    leadingActions = {
+                        SkitCamIconAction(
+                            CameraIcon.Loop,
+                            if (controller.loop) "Turn loop off" else "Loop from clip ${plan?.anchorOrder ?: 1}",
+                            onClick = controller::toggleLoop,
+                            modifier = Modifier.semantics {
+                                selected = controller.loop
+                                stateDescription = if (controller.loop) "Loop on, from clip ${plan?.anchorOrder ?: 1}" else "Loop off"
+                            },
+                            tint = if (controller.loop) SkitCamColors.Success else SkitCamColors.TextSecondary
+                        )
+                        if (controller.finished && controller.player != null) {
+                            SkitCamIconAction(CameraIcon.Reset, "Replay", onClick = controller::replay)
+                        }
+                    },
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
