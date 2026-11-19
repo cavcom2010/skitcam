@@ -17,9 +17,18 @@ class ExportService : Service() {
     companion object {
         private val running=AtomicBoolean(false)
         fun launch(context: Context,id: String,retry: Boolean=false) {
-            if(retry && ExportJournal.busy) return
-            if(retry) ExportJournal.cancelRequested=false
-            context.startForegroundService(Intent(context,ExportService::class.java).putExtra("session",id))
+            synchronized(ExportJournal) {
+                if (retry && ExportJournal.busy) return
+                if (ExportJournal.read(context, id) == null) return
+                if (retry) ExportJournal.cancelRequested = false
+                ExportJournal.busy = true
+                try {
+                    context.startForegroundService(Intent(context,ExportService::class.java).putExtra("session",id))
+                } catch (e: Exception) {
+                    ExportJournal.busy = false
+                    throw e
+                }
+            }
         }
     }
     private val executor=Executors.newSingleThreadExecutor()
@@ -58,6 +67,7 @@ class ExportService : Service() {
             }
             val deadline=System.nanoTime()+40_000_000_000L
             while(!job.optBoolean("ready")) {
+                check(!job.optBoolean("recordingFailed")) { "The last take needs recovery. Original clips are retained." }
                 check(System.nanoTime()<deadline) { "Recording did not finalise. Sources are retained." }
                 Thread.sleep(100);job=ExportJournal.read(this,id)!!
             }
@@ -129,10 +139,10 @@ class ExportService : Service() {
                 e.message ?: "Finishing failed. Recording files are preserved.") } catch(_: Exception) { }
         } finally {
             if(wakeLock?.isHeld==true) wakeLock.release()
-            ExportJournal.busy=false;running.set(false)
             ExportTrace.mark(id,"serviceIdle")
             ExportTrace.flush(this,id)
             stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
+            running.set(false);ExportJournal.busy=false
         }
     }
     override fun onTimeout(startId: Int,fgsType: Int) {

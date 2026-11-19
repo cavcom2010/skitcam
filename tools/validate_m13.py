@@ -20,7 +20,8 @@ def main():
     parser.add_argument("--serial", default="ZY22KJQLTV")
     parser.add_argument("--output", default=".validation/m13-review-stable")
     parser.add_argument("--package", choices=[PACKAGE, "com.calvinmazhindu.skitcam.m13reviewvalidation",
-                                             "com.calvinmazhindu.skitcam.m13validation"],
+                                             "com.calvinmazhindu.skitcam.m13validation",
+                                             "com.calvinmazhindu.skitcam.m14validation"],
                         default=PACKAGE, help="Use a fresh validation package; fixtures must not replace an owner draft.")
     parser.add_argument("--match", default=".*")
     options = parser.parse_args()

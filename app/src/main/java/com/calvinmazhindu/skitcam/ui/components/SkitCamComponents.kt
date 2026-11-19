@@ -113,14 +113,15 @@ fun SkitCamSecondaryButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    destructive: Boolean = false
 ) {
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.heightIn(min = SkitCamSpacing.touchTarget),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = SkitCamColors.Warm,
+            contentColor = if (destructive) SkitCamColors.Error else SkitCamColors.Warm,
             disabledContentColor = SkitCamColors.TextMuted
         ),
         shape = MaterialTheme.shapes.medium

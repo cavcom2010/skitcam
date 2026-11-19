@@ -44,7 +44,7 @@ import com.calvinmazhindu.skitcam.ui.video.VideoTransportControls
 import com.calvinmazhindu.skitcam.ui.video.rememberVideoPlaybackState
 
 @Composable
-fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
+fun ExportScreen(status: ExportStatus, busy: Boolean, onNewRecording: () -> Unit) {
     val context=LocalContext.current
     var feedback by remember { mutableStateOf<String?>(null) }
     var notificationAsked by rememberSaveable { mutableStateOf(false) }
@@ -79,7 +79,7 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
                 ExportState.Completed -> "Opening camera"
                 ExportState.Empty -> "No kept segments"
                 ExportState.Failed -> "Could not finish video"
-                ExportState.Cancelled -> "Finishing cancelled"
+                ExportState.Cancelled -> "Export cancelled"
                 ExportState.Preparing -> "Preparing video"
                 ExportState.Exporting -> "Finishing video"
                 ExportState.Verifying -> "Checking video"
@@ -91,9 +91,11 @@ fun ExportScreen(status: ExportStatus,onNewRecording: () -> Unit) {
             Text(feedback ?: status.message ?: "Your original recordings are preserved.",style=MaterialTheme.typography.bodyMedium)
             if(status.active && status.state!=ExportState.Publishing)
                 SkitCamSecondaryButton("Cancel export", { ExportJournal.cancelRequested=true })
+            if (!status.active && status.state != ExportState.Completed)
+                Text("Your original clips are still on this device.", style = MaterialTheme.typography.bodyMedium)
             if(status.state in setOf(ExportState.Failed,ExportState.Cancelled))
-                SkitCamPrimaryButton("Retry", { retry() })
-            if(!status.active && status.state!=ExportState.Completed)
+                SkitCamPrimaryButton("Retry export", { retry() }, enabled = !busy)
+            if(!busy && !status.active && status.state!=ExportState.Completed)
                 SkitCamSecondaryButton("New Recording", onNewRecording)
         }
     }

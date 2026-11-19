@@ -67,7 +67,8 @@ class M13UiDeviceTest {
     @Before fun open() {
         check(context.packageName in setOf("com.calvinmazhindu.skitcam.m13validation",
             "com.calvinmazhindu.skitcam.m13reviewvalidation",
-            "com.calvinmazhindu.skitcam.m13reviewstablevalidation")) { "M13 validation only." }
+            "com.calvinmazhindu.skitcam.m13reviewstablevalidation",
+            "com.calvinmazhindu.skitcam.m14validation")) { "M13 validation only." }
         rotation = shell("wm user-rotation")
         fixedRotation = shell("wm fixed-to-user-rotation")
         if (landscape && args.getString("idle") == "true") shell("wm fixed-to-user-rotation enabled")
@@ -93,6 +94,12 @@ class M13UiDeviceTest {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity { activity = it }
         await("recovery and preview") { model.recovered.value && model.cameraReady }
+        if (idle && context.packageName == "com.calvinmazhindu.skitcam.m14validation") {
+            await("idle camera or older draft prompt") {
+                node("Start recording") != null || node("Recover a skit") != null
+            }
+            if (node("Recover a skit") != null) click("Later")
+        }
         await("actual layout orientation") { main { (activity.window.decorView.width > activity.window.decorView.height) == landscape } }
         args.getString("font")?.toFloat()?.let { font ->
             assertEquals(font, main { activity.resources.configuration.fontScale }, .01f)
@@ -560,7 +567,7 @@ class M13UiDeviceTest {
     @Test fun exportAndGalleryPresentation() {
         val states = listOf(ExportState.Preparing to "Preparing video", ExportState.Exporting to "Finishing video",
             ExportState.Verifying to "Checking video", ExportState.Publishing to "Saving to gallery",
-            ExportState.Failed to "Could not finish video", ExportState.Cancelled to "Finishing cancelled")
+            ExportState.Failed to "Could not finish video", ExportState.Cancelled to "Export cancelled")
         try {
             for ((state, title) in states) {
                 main { ExportJournal.status.value = ExportStatus(fixture.id, state, "Presentation fixture · originals preserved") }
@@ -569,7 +576,7 @@ class M13UiDeviceTest {
                     reachable("Cancel export"); assertTarget("Cancel export")
                 }
                 if (state == ExportState.Failed || state == ExportState.Cancelled) {
-                    reachable("Retry"); assertTarget("Retry")
+                    reachable("Retry export"); assertTarget("Retry export")
                 }
                 shot("export-${state.name.lowercase()}")
             }

@@ -87,7 +87,7 @@ private fun CameraPreviewContent(model: RecordingViewModel, cameraModel: CameraM
     val landscape = window.width > window.height
     // A new view per idle binding choice prevents accepting the previous stream's cached STREAMING event.
     val videoRevision = if(photo) 0 else cameraModel.video.revision
-    val view = remember(context, choice, videoRevision, photoBindingKey) { PreviewView(context).apply {
+    val view = remember(context, choice, videoRevision, photoBindingKey, cameraModel.recoveryRevision) { PreviewView(context).apply {
         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
     } }
     var attempt by remember { mutableIntStateOf(0) }

@@ -86,6 +86,15 @@ class CameraModel(application: Application) : AndroidViewModel(application) {
         initialized = true
     }
     val ready get() = loaded && initialized
+    var recoveryRevision by mutableIntStateOf(0)
+        private set
+    fun restoreSessionLens(lens: CameraLens) {
+        val next = CameraChoice(CameraMode.SkitVideo, lens)
+        switching = true
+        streaming = false
+        choice = next
+        recoveryRevision++
+    }
     fun select(mode: CameraMode = choice.mode, lens: CameraLens? = null, allowed: Boolean) {
         if (!allowed || switching || !streaming) return
         val desiredLens = lens ?: if (mode == choice.mode) choice.lens else runCatching {

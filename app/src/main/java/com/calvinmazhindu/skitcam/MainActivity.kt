@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -63,6 +64,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.ViewModelProvider
 import com.calvinmazhindu.skitcam.recording.RecordingControls
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
+import com.calvinmazhindu.skitcam.recording.RecordingBatteryMonitor
 import com.calvinmazhindu.skitcam.recording.RecordingState
 import com.calvinmazhindu.skitcam.recording.CameraOrientationController
 import com.calvinmazhindu.skitcam.review.PausedEnvironment
@@ -90,6 +92,7 @@ class MainActivity : ComponentActivity() {
     val finishConfirmation: FinishConfirmationViewModel by lazy { ViewModelProvider(this)[FinishConfirmationViewModel::class.java] }
     val orientation: CameraOrientationController by lazy { CameraOrientationController(this) }
     val playback: SkitPlaybackController by lazy { SkitPlaybackController(applicationContext) }
+    private val batteryMonitor by lazy { RecordingBatteryMonitor(this, recordingModel::updateBattery) }
     private val beforeCapture: (Int) -> Unit = { degrees ->
         orientation.beforeCapture(degrees)
         check(cameraModel.previewDisplayRotation==orientation.displayRotation) { "Wait for the rotated camera preview before recording." }
@@ -108,6 +111,14 @@ class MainActivity : ComponentActivity() {
                 Surface(color=SkitCamColors.Ink,contentColor=SkitCamColors.TextPrimary) { CameraScreen() }
             }
         }
+    }
+    override fun onStart() {
+        super.onStart()
+        batteryMonitor.start()
+    }
+    override fun onStop() {
+        batteryMonitor.stop()
+        super.onStop()
     }
     override fun onResume() {
         super.onResume()
@@ -159,6 +170,17 @@ internal fun MainActivity.CameraScreen() {
     val snackbars = remember { SnackbarHostState() }
     val recovered by recordingModel.recovered.collectAsStateWithLifecycle()
     val commandPending by recordingModel.commandPending.collectAsStateWithLifecycle()
+    val drafts by recordingModel.drafts.collectAsStateWithLifecycle()
+    val pendingCleanup by recordingModel.pendingCleanup.collectAsStateWithLifecycle()
+    val cleanupSelected = snapshot.session?.id in pendingCleanup
+    val scope = rememberCoroutineScope()
+    var discardId by remember { mutableStateOf<String?>(null) }
+    var newRecordingId by remember { mutableStateOf<String?>(null) }
+    var dismissedRecovery by rememberSaveable { mutableStateOf<String?>(null) }
+    var draftsOffered by rememberSaveable { mutableStateOf(false) }
+    var draftIndex by rememberSaveable { mutableIntStateOf(0) }
+    var showDrafts by remember { mutableStateOf(false) }
+    var cleanupId by remember { mutableStateOf<String?>(null) }
     val finishUi = finishConfirmation
     LaunchedEffect(snapshot.session?.id, snapshot.state) { finishUi.validate(snapshot) }
     LaunchedEffect(recovered) {
@@ -184,9 +206,19 @@ internal fun MainActivity.CameraScreen() {
     camera.video.beforeChange = { recordingModel.cameraReady = false }
     val photos = photoModel
     val matchingExport = export?.sessionId == snapshot.session?.id && export!=null
-    val recoveryResult = matchingExport && export?.state in setOf(ExportState.Failed,ExportState.Cancelled,ExportState.Empty) && camera.acknowledgedExport!=export?.sessionId
+    val recoveryResult = matchingExport && snapshot.recovery == null && !cleanupSelected &&
+        export?.state in setOf(ExportState.Failed, ExportState.Cancelled, ExportState.Empty)
     val finishing = matchingExport && (export?.active==true || exportBusy || recoveryResult)
-    val reorderEligible = recovered && !inlineReorder.recovering && !snapshot.unresolved &&
+    val showRecovery = snapshot.recovery != null && snapshot.session?.id != dismissedRecovery &&
+        !snapshot.unresolved && !finishing && !cleanupSelected
+    LaunchedEffect(recovered, drafts.isNotEmpty(), finishing, snapshot.openSession) {
+        if (recovered && !draftsOffered && drafts.isNotEmpty() && !finishing && !snapshot.openSession) {
+            draftsOffered = true
+            showDrafts = true
+        }
+    }
+    LaunchedEffect(pendingCleanup) { cleanupId = pendingCleanup.firstOrNull() }
+    val reorderEligible = recovered && !cleanupSelected && !inlineReorder.recovering && !snapshot.unresolved &&
         !commandPending && !exportBusy && !finishing && !review.saving &&
         snapshot.state == RecordingState.Paused &&
         inlineReorder.draft?.let { pending -> snapshot.session?.let(pending::matches) } != false
@@ -198,7 +230,8 @@ internal fun MainActivity.CameraScreen() {
     // This owner survives Photo/Video control changes and the finishing overlay.
     SideEffect { orientation.update(snapshot,recovered,finishing,commandPending) }
     val settingsAllowed = recovered && !snapshot.unresolved && !commandPending && !photos.busy && !finishing &&
-        snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed,RecordingState.Paused)
+        (snapshot.state in setOf(RecordingState.Ready,RecordingState.Completed,RecordingState.Paused) ||
+            snapshot.recovery != null)
     LaunchedEffect(camera.loaded, recovered) {
         if(camera.loaded && recovered) {
             // UI collectors can resume in different orders. Read the completed recovery directly.
@@ -417,7 +450,7 @@ internal fun MainActivity.CameraScreen() {
                 }
             }
         }
-        if (!photo && !finishing && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
+        if (!photo && !finishing && !cleanupSelected && snapshot.state == RecordingState.Paused && snapshot.session != null && headerHeight > 0 && controlsHeight > 0) {
             val top = with(density) { headerHeight.toDp() }
             val bottom = with(density) { controlsHeight.toDp() }
             val pausedModifier = if (immersiveVideoUi) Modifier.fillMaxSize() else Modifier.fillMaxSize()
@@ -480,10 +513,11 @@ internal fun MainActivity.CameraScreen() {
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },
                  beforeRecording = { camera.dismissSavedNotice();playback.close();trimModel.close();review.close() },
                   navigate = ::navigateReorder,
-                  finishEnabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy ||
+                  finishEnabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy || cleanupSelected ||
                       inlineReorder.saving || inlineReorder.recovering || review.saving || trimModel.saving),
                   onFinish = { navigateReorder {
-                      finishUi.request(recordingModel.snapshots.value,
+                      if (recordingModel.snapshots.value.recovery != null) dismissedRecovery = null
+                      else finishUi.request(recordingModel.snapshots.value,
                           !recordingModel.recovered.value || recordingModel.commandPending.value || ExportJournal.busy)
                   } },
                   onBackground = { playback.close(); review.close() })
@@ -497,9 +531,141 @@ internal fun MainActivity.CameraScreen() {
         if(quick && !editors) Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top=56.dp)) {
             CameraTools(camera,false,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,onMore=if(settingsAllowed) {{quick=false;settings=true}} else null,audio=recordingModel.audio) { quick=false }
         }
-        if(settings && settingsAllowed) CameraTools(camera,true,adjustments,snapshot.session?.segments?.lastOrNull()?.media,snapshot.openSession,audio=recordingModel.audio) { settings=false }
-        if (finishing) ExportScreen(export!!) { camera.acknowledge(export!!.sessionId) }
-        if (finishUi.sessionId != null && !finishing) {
+        if (settings && settingsAllowed) CameraTools(camera, true, adjustments,
+            snapshot.session?.segments?.lastOrNull()?.media, snapshot.openSession, audio = recordingModel.audio,
+            onRecover = if (snapshot.recovery != null || (!snapshot.openSession && drafts.isNotEmpty()) ||
+                pendingCleanup.isNotEmpty()) ({
+                settings = false
+                when {
+                    pendingCleanup.isNotEmpty() -> cleanupId = pendingCleanup.first()
+                    snapshot.recovery != null -> dismissedRecovery = null
+                    else -> { draftIndex = 0; showDrafts = true }
+                }
+            }) else null) { settings = false }
+        if (finishing) ExportScreen(export!!, exportBusy || commandPending) { newRecordingId = export!!.sessionId }
+
+        fun report(result: com.calvinmazhindu.skitcam.recording.SegmentEditResult) {
+            if (!result.success) scope.launch { snackbars.showSnackbar(result.message ?: "Could not update this skit.") }
+        }
+
+        newRecordingId?.takeIf { it == snapshot.session?.id && !exportBusy }?.let { id ->
+            val uncertain = export?.publicationUncertain == true
+            SkitCamConfirmation("Start a new recording?",
+                if (uncertain) "Keep this skit as a draft. You can reopen it from Settings and retry to check whether the video was saved."
+                else "Keep this skit as a draft you can reopen from Settings, or permanently discard its clips.",
+                onDismiss = { newRecordingId = null }) {
+                SkitCamPrimaryButton("Keep as draft and start new", modifier = Modifier.fillMaxWidth(),
+                    enabled = !commandPending, onClick = {
+                        draftsOffered = true
+                        recordingModel.keepDraft(id, ::report)
+                        newRecordingId = null
+                    })
+                if (!uncertain) SkitCamSecondaryButton("Discard and start new", {
+                    newRecordingId = null
+                    discardId = id
+                }, Modifier.fillMaxWidth(), enabled = !commandPending, destructive = true)
+                SkitCamSecondaryButton("Cancel", { newRecordingId = null }, Modifier.fillMaxWidth())
+            }
+        }
+
+        if (showRecovery && discardId == null && !settings) {
+            val id = requireNotNull(snapshot.session).id
+            val result = requireNotNull(snapshot.recovery)
+            val count = result.playableIds.size
+            val kept = snapshot.session!!.playbackOrder.count { it in result.playableIds }
+            val message = buildString {
+                append(this@CameraScreen.resources.getQuantityString(R.plurals.recovered_segments, count, count))
+                if (result.candidates.isNotEmpty())
+                    append(" The last segment could not be confirmed. Any unfinished files are retained.")
+                if (result.unavailableCount > 0)
+                    append(" ${result.unavailableCount} confirmed clips are missing or unreadable.")
+                if (result.candidates.isEmpty() && result.unavailableCount == 0 && count == 0)
+                    append(" There are no playable clips in this skit.")
+            }
+            fun open(exportRecovered: Boolean) {
+                recordingModel.openRecovered(id) { outcome ->
+                    report(outcome)
+                    if (outcome.success && exportRecovered) recordingModel.stop("recovery-confirmed")
+                }
+            }
+            SkitCamConfirmation(if (result.interrupted) "Recording interrupted" else "Recovered skit",
+                message, onDismiss = { dismissedRecovery = id }) {
+                SkitCamPrimaryButton("Continue recording", modifier = Modifier.fillMaxWidth(),
+                    enabled = !commandPending, onClick = { open(false) })
+                SkitCamSecondaryButton("Review recovered segments", { open(false) }, Modifier.fillMaxWidth(),
+                    enabled = count > 0 && !commandPending)
+                SkitCamSecondaryButton("Export recovered segments", { open(true) }, Modifier.fillMaxWidth(),
+                    enabled = kept > 0 && !commandPending)
+                SkitCamSecondaryButton("Discard recording", { discardId = id }, Modifier.fillMaxWidth(),
+                    enabled = !commandPending, destructive = true)
+                SkitCamSecondaryButton("Later", { dismissedRecovery = id; finishUi.cancel() }, Modifier.fillMaxWidth())
+                Text("Use Resume to record the next segment.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        if (showDrafts && !showRecovery && !finishing && !snapshot.openSession && drafts.isNotEmpty()) {
+            val draft = drafts[draftIndex.coerceIn(drafts.indices)]
+            val date = java.text.DateFormat.getDateTimeInstance().format(java.util.Date(draft.recordedAt))
+            SkitCamConfirmation("Recover a skit",
+                if (draft.session == null) "The skit from $date has unreadable metadata. Its files are retained."
+                else "The skit from $date is still on this device.",
+                onDismiss = { showDrafts = false }) {
+                if (draft.session != null) SkitCamPrimaryButton("Open skit", modifier = Modifier.fillMaxWidth(),
+                    enabled = !commandPending, onClick = {
+                        recordingModel.selectDraft(draft.id) { outcome ->
+                            report(outcome)
+                            if (outcome.success) {
+                                showDrafts = false
+                                dismissedRecovery = null
+                                if (recordingModel.snapshots.value.openSession) camera.restoreSessionLens(draft.session.lens)
+                            }
+                        }
+                    })
+                if (drafts.size > 1)
+                    SkitCamSecondaryButton("Next skit", { draftIndex = (draftIndex + 1) % drafts.size }, Modifier.fillMaxWidth())
+                SkitCamSecondaryButton("Later", { showDrafts = false }, Modifier.fillMaxWidth())
+            }
+        }
+
+        cleanupId?.takeUnless { finishing || discardId != null }?.let { id ->
+            SkitCamConfirmation("Discard interrupted",
+                "Some files remain in the skit you chose to discard. You can retry cleanup.",
+                onDismiss = { cleanupId = null }) {
+                SkitCamSecondaryButton("Retry cleanup", {
+                    recordingModel.abandon(id, ::report)
+                    cleanupId = null
+                }, Modifier.fillMaxWidth(), enabled = !commandPending, destructive = true)
+                SkitCamSecondaryButton("Later", { cleanupId = null }, Modifier.fillMaxWidth())
+            }
+        }
+
+        discardId?.takeIf { it == snapshot.session?.id }?.let { id ->
+            val count = snapshot.session!!.segments.size.coerceAtLeast(0)
+            val message = buildString {
+                append(this@CameraScreen.resources.getQuantityString(R.plurals.discard_skit_message, count, count))
+                if (snapshot.unresolved) append(" The current take will be stopped and discarded too.")
+                if (!snapshot.unresolved && (snapshot.session!!.pending != null || snapshot.session!!.unconfirmed.isNotEmpty()))
+                    append(" Any unfinished files in this skit will also be deleted.")
+            }
+            SkitCamConfirmation("Discard this skit?", message, onDismiss = {
+                discardId = null
+                finishUi.cancel()
+            }) {
+                SkitCamPrimaryButton("Keep skit", modifier = Modifier.fillMaxWidth(), onClick = {
+                    discardId = null
+                    finishUi.cancel()
+                })
+                SkitCamSecondaryButton(this@CameraScreen.resources.getQuantityString(R.plurals.discard_skit_button, count, count), {
+                    discardId = null
+                    finishUi.cancel()
+                    playback.close()
+                    trimModel.close()
+                    review.close()
+                    recordingModel.abandon(id, ::report)
+                }, Modifier.fillMaxWidth(), enabled = !commandPending, destructive = true)
+            }
+        }
+        if (finishUi.sessionId != null && !finishing && discardId == null && !showRecovery) {
             val active = snapshot.state == RecordingState.Recording
             val interrupted = snapshot.state == RecordingState.Error
             val unreadable = interrupted && snapshot.session == null
@@ -515,7 +681,7 @@ internal fun MainActivity.CameraScreen() {
             ) {
                 SkitCamPrimaryButton(
                     text = stringResource(if (interrupted) R.string.finish_recording else R.string.finish_export),
-                    enabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy ||
+                    enabled = finishUi.eligible(snapshot, !recovered || commandPending || exportBusy || cleanupSelected ||
                         inlineReorder.draft != null || inlineReorder.saving || review.saving || trimModel.saving),
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
@@ -536,6 +702,9 @@ internal fun MainActivity.CameraScreen() {
                         else -> R.string.keep_editing
                     }),
                     finishUi::cancel, Modifier.fillMaxWidth())
+                if (!unreadable)
+                    SkitCamSecondaryButton("Discard entire skit", { discardId = snapshot.session?.id },
+                        Modifier.fillMaxWidth(), destructive = true)
             }
         }
         if (reorderNavigation != null) {

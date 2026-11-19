@@ -10,6 +10,14 @@ class RecordingEngineTest {
         var bytes = RecordingEngine.START_RESERVE * 2
         var brokenSave = false
         var invalidMedia = false
+        var deleteFails = false
+        val abandoned = mutableListOf<String>()
+        override fun abandon(sessionId: String) {
+            check(!deleteFails) { "Storage failure" }
+            check(saved?.id == sessionId)
+            abandoned += sessionId
+            saved = null
+        }
         override fun freeBytes() = bytes
         override fun loadLatest() = saved
         override fun save(session: Session) {
@@ -242,5 +250,108 @@ class RecordingEngineTest {
         engine.resume(0);recorder.started();engine.stop();engine.pauseForAudioChange("Stopping")
         assertEquals(RecordingState.Stopping,engine.snapshot.state);recorder.done()
         assertEquals(RecordingState.Completed,engine.snapshot.state);assertEquals(2,engine.snapshot.count)
+    }
+
+    @Test fun discardWaitsForMatchingSuccessfulFinalisationAndRunsOnce() {
+        begin(); pause()
+        val id = store.saved!!.id
+        engine.resume(0); recorder.started()
+        val results = mutableListOf<SegmentEditResult>()
+        engine.abandonSession(id, results::add)
+        engine.abandonSession(id, results::add)
+        assertEquals(listOf(false), results.map { it.success })
+        assertEquals(2, recorder.stops)
+        assertTrue(store.abandoned.isEmpty())
+        recorder.done()
+        recorder.done()
+        assertEquals(listOf(false, true), results.map { it.success })
+        assertEquals(listOf(id), store.abandoned)
+        assertEquals(RecordingState.Ready, engine.snapshot.state)
+    }
+
+    @Test fun abandonedFinalisationFailureRetainsCandidateAndEarlierRecording() {
+        begin(); pause()
+        val id = store.saved!!.id
+        engine.resume(0); recorder.started()
+        val results = mutableListOf<SegmentEditResult>()
+        engine.abandonSession(id, results::add)
+        recorder.done("CameraX failed")
+        assertFalse(results.single().success)
+        assertTrue(store.abandoned.isEmpty())
+        assertTrue(engine.snapshot.recovery!!.playableIds.isNotEmpty())
+        assertNotNull(store.saved!!.pending)
+    }
+
+    @Test fun timedOutDiscardDoesNotDeleteOnLateFinalize() {
+        begin()
+        val results = mutableListOf<SegmentEditResult>()
+        engine.abandonSession(store.saved!!.id, results::add)
+        timeout!!.invoke()
+        recorder.done()
+        assertFalse(results.single().success)
+        assertTrue(store.abandoned.isEmpty())
+        assertEquals(1, store.saved!!.segments.size)
+    }
+
+    @Test fun pausedDiscardIsBoundToIdentityAndCanBeRetriedOnFailure() {
+        begin(); pause()
+        engine.resume(0); recorder.started(); pause()
+        val session = store.saved!!
+        val results = mutableListOf<SegmentEditResult>()
+        engine.abandonSession("other", results::add)
+        store.deleteFails = true
+        engine.abandonSession(session.id, results::add)
+        assertEquals(session, store.saved)
+        store.deleteFails = false
+        engine.abandonSession(session.id, results::add)
+        engine.abandonSession(session.id, results::add)
+        assertEquals(listOf(false, false, true, false), results.map { it.success })
+        assertEquals(listOf(session.id), store.abandoned)
+    }
+
+    @Test fun interruptedRecordingContinuesPastPendingAttemptAfterRepeatedRestarts() {
+        begin(); pause()
+        engine.resume(0); recorder.started(); pause()
+        val order = store.saved!!.playbackOrder.reversed()
+        assertTrue(engine.savePlaybackOrder(store.saved!!.id, order.reversed(), order).success)
+        engine.resume(0); recorder.started()
+        val before = store.saved!!
+        repeat(2) {
+            val restored = engine()
+            restored.restore()
+            assertEquals(before, store.saved)
+            assertEquals(2, restored.snapshot.recovery!!.playableIds.size)
+        }
+        val restored = engine()
+        restored.restore()
+        assertTrue(restored.openRecovered(before.id).success)
+        assertEquals(order, store.saved!!.playbackOrder)
+        assertEquals(listOf(before.pending), store.saved!!.unconfirmed)
+        restored.resume(0); recorder.started()
+        assertEquals(4, store.saved!!.pending!!.order)
+        assertTrue(recorder.paths.last().endsWith("segment_004.mp4"))
+    }
+
+    @Test fun batteryPauseClosesOnceAndOnlyPublishesConfirmedClip() {
+        begin()
+        engine.pauseForBattery()
+        engine.pauseForBattery()
+        assertEquals(1, recorder.stops)
+        assertEquals(RecordingState.Finalising, engine.snapshot.state)
+        assertEquals(0, engine.snapshot.count)
+        assertFalse(engine.snapshot.message!!.contains("preserved"))
+        recorder.done()
+        assertEquals(RecordingState.Paused, engine.snapshot.state)
+        assertEquals(1, store.saved!!.retainedCount)
+        assertEquals(RecordingEngine.BATTERY_PAUSED, engine.snapshot.message)
+    }
+
+    @Test fun failedBatteryFinalisationRetainsRecoveryCandidate() {
+        begin()
+        engine.pauseForBattery()
+        recorder.done("File could not be registered")
+        assertEquals(RecordingState.Error, engine.snapshot.state)
+        assertEquals(0, engine.snapshot.count)
+        assertEquals(listOf(store.saved!!.pending), engine.snapshot.recovery!!.candidates)
     }
 }

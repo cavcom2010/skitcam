@@ -32,7 +32,8 @@ import kotlin.math.roundToInt
 
 @Composable
 fun CameraTools(model: CameraModel, full: Boolean, adjustmentsEnabled: Boolean, observed: SegmentMediaFacts?=null,
-    sessionOpen: Boolean=false,onMore: (() -> Unit)?=null,audio: AudioMonitor?=null,onClose: ()->Unit) {
+    sessionOpen: Boolean=false,onMore: (() -> Unit)?=null,audio: AudioMonitor?=null,
+    onRecover: (() -> Unit)? = null, onClose: ()->Unit) {
     val maxQuickHeight=with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp()*.55f }
     var advanced by remember { mutableStateOf(false) }
     val video=model.video
@@ -58,6 +59,7 @@ fun CameraTools(model: CameraModel, full: Boolean, adjustmentsEnabled: Boolean, 
                     verticalArrangement=Arrangement.spacedBy(SkitCamSpacing.sm)
                 ) {
                     SkitCamDialogTitle(title,onClose)
+                    if (full && onRecover != null) SkitCamSecondaryButton("Recover skit", onRecover)
                     if(photo) {
                         if(full) SkitCamSectionHeading(stringResource(R.string.quick_photo))
                         Text(stringResource(R.string.aspect_ratio),style=MaterialTheme.typography.labelLarge)

@@ -34,6 +34,11 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     val recovered get() = runtime.recovered
     val commandPending get() = runtime.commandPending
     val legacyMedia get() = runtime.legacyMedia
+    internal val drafts get() = runtime.drafts
+    internal val pendingCleanup get() = runtime.pendingCleanup
+    internal val battery get() = runtime.battery.asStateFlow()
+    internal val batteryPolicy get() = runtime.batteryPolicy
+    internal fun updateBattery(reading: BatteryReading) = runtime.updateBattery(reading)
     var boundLens: CameraLens
         get() = runtime.boundLens
         set(value) { runtime.boundLens = value }
@@ -43,6 +48,10 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     fun start(orientation: Int?) = runtime.start(orientation)
     fun resume(orientation: Int?) = runtime.resume(orientation)
     fun pause() = runtime.pause()
+    fun abandon(sessionId: String, finished: (SegmentEditResult) -> Unit) = runtime.abandon(sessionId, finished)
+    fun keepDraft(sessionId: String, finished: (SegmentEditResult) -> Unit) = runtime.defer(sessionId, finished)
+    fun selectDraft(sessionId: String, finished: (SegmentEditResult) -> Unit) = runtime.selectDraft(sessionId, finished)
+    fun openRecovered(sessionId: String, finished: (SegmentEditResult) -> Unit) = runtime.openRecovered(sessionId, finished)
     fun stop(origin: String = "command", startedNanos: Long = android.os.SystemClock.elapsedRealtimeNanos()) = runtime.stop(origin, startedNanos)
     fun setSegmentKept(sessionId: String, segmentId: String, kept: Boolean, finished: (SegmentEditResult) -> Unit) =
         runtime.setSegmentKept(sessionId, segmentId, kept, finished)
@@ -64,6 +73,11 @@ private class RecordingRuntime(private val application: Application) {
     val recovered = MutableStateFlow(false)
     val commandPending = MutableStateFlow(false)
     val legacyMedia = MutableStateFlow<com.calvinmazhindu.skitcam.video.SegmentMediaFacts?>(null)
+    private val store = SessionFileStore(File(application.filesDir, "sessions"))
+    val drafts = MutableStateFlow(emptyList<SessionFileStore.Entry>())
+    val pendingCleanup = MutableStateFlow(emptyList<String>())
+    val batteryPolicy = RecordingBatteryPolicy()
+    val battery = MutableStateFlow(BatteryReading())
     @Volatile var boundLens = CameraLens.Rear
     val snapshots = state.asStateFlow()
     val audio = com.calvinmazhindu.skitcam.audio.AudioMonitor(application, ::audioChanged)
@@ -74,14 +88,18 @@ private class RecordingRuntime(private val application: Application) {
     var cameraReady: Boolean
         get() = camera.value
         set(value) { camera.value = value }
-    private val engine: RecordingEngine = RecordingEngine(port, SessionFileStore(File(application.filesDir, "sessions")),
+    private val engine: RecordingEngine = RecordingEngine(port, store,
         Watchdog { callback ->
             val runnable = Runnable { worker.execute(callback) }
             main.postDelayed(runnable, 30_000)
             Cancellation { main.removeCallbacks(runnable) }
         }, availability = {
             when {
+                !batteryPolicy.allowsCapture(battery.value) -> "Wait for the battery level to allow recording."
                 ExportJournal.busy -> "Wait for video finishing to complete."
+                engine.snapshot.state == RecordingState.Completed &&
+                    ExportJournal.status.value?.let { it.sessionId == engine.snapshot.session?.id && it.state != ExportState.Completed } == true ->
+                    "Choose what to do with the unexported skit before starting another."
                 !recovered.value -> "Wait for session recovery."
                 !cameraReady -> "Wait for the camera preview."
                 engineLensMismatch() -> "The original session camera is not ready."
@@ -94,34 +112,130 @@ private class RecordingRuntime(private val application: Application) {
         }, changed = {
             state.value = it
             if (it.state == RecordingState.Completed) ExportTrace.mark(it.session?.id, "sessionCommitted")
-            if(it.state in setOf(RecordingState.Completed,RecordingState.Error)) it.session?.let { session ->
+            if(it.state == RecordingState.Completed && !it.unresolved) it.session?.let { session ->
                 try { ExportJournal.finalised(application,session) } catch(_: Exception) { }
             }
+            if (it.state == RecordingState.Error) it.session?.let { session ->
+                runCatching { ExportJournal.recordingFailed(application, session.id) }
+            }
         })
+    fun updateBattery(reading: BatteryReading) {
+        if (battery.value == reading) return
+        battery.value = reading
+        if (batteryPolicy.shouldPause(reading)) worker.execute { engine.pauseForBattery() }
+    }
     init { worker.execute {
         engine.restore()
         engine.snapshot.session?.let { try { ExportJournal.restore(application,it) } catch(_: Exception) {} }
-        engine.snapshot.session?.takeIf { engine.snapshot.openSession && it.captureProfile==null && it.invalidProfileJson==null }?.let { session ->
-            legacyMedia.value=session.segments.sortedBy { it.order }.firstNotNullOfOrNull { segment -> runCatching { com.calvinmazhindu.skitcam.video.VideoInspector.inspect(segment.path) }.getOrNull() }
-        }
+        inspectLegacyProfile()
+        refreshDrafts()
         recovered.value = true
     } }
+    private fun inspectLegacyProfile() {
+        legacyMedia.value = null
+        engine.snapshot.session?.takeIf { engine.snapshot.openSession && it.captureProfile==null && it.invalidProfileJson==null }?.let { session ->
+            val playable = engine.snapshot.recovery?.playableIds
+            legacyMedia.value = session.segments.sortedBy { it.order }.firstNotNullOfOrNull { segment ->
+                if (playable != null && segment.id !in playable) null
+                else runCatching { com.calvinmazhindu.skitcam.video.VideoInspector.inspect(segment.path) }.getOrNull()
+            }
+        }
+    }
+
+    private fun refreshDrafts() {
+        drafts.value = store.entries().filter { entry ->
+            if (entry.id == engine.snapshot.session?.id) return@filter false
+            try {
+                val job = ExportJournal.read(application, entry.id)
+                job?.optString("state") != ExportState.Completed.name &&
+                    (entry.session == null || entry.session.deferred ||
+                        entry.session.state != RecordingState.Completed || entry.session.segments.isNotEmpty() ||
+                        entry.session.pending != null || job != null)
+            } catch (_: Exception) { true }
+        }
+        pendingCleanup.value = store.cleanup.pending()
+    }
+
+    private fun sessionCommand(finished: (SegmentEditResult) -> Unit,
+        command: ((SegmentEditResult) -> Unit) -> Unit) {
+        if (!recovered.value || commandPending.value) {
+            finished(SegmentEditResult(false, "Wait for the current operation to finish."))
+            return
+        }
+        commandPending.value = true
+        worker.execute {
+            val complete: (SegmentEditResult) -> Unit = { result ->
+                refreshDrafts()
+                commandPending.value = false
+                main.post { finished(result) }
+            }
+            try {
+                synchronized(ExportJournal) {
+                    if (ExportJournal.busy) complete(SegmentEditResult(false, "Wait for export to finish."))
+                    else command(complete)
+                }
+            } catch (e: Exception) {
+                complete(SegmentEditResult(false, e.message ?: "Could not update the skit. Files are retained."))
+            }
+        }
+    }
+
+    fun abandon(id: String, finished: (SegmentEditResult) -> Unit) = sessionCommand(finished) { complete ->
+        if (engine.snapshot.session?.id == id) engine.abandonSession(id) {
+            if (it.success) ExportJournal.clearStatus(id)
+            complete(it)
+        } else {
+            check(id in store.cleanup.pending()) { "This skit is no longer selected." }
+            store.abandon(id)
+            complete(SegmentEditResult(true))
+        }
+    }
+
+    fun defer(id: String, finished: (SegmentEditResult) -> Unit) = sessionCommand(finished) { complete ->
+        val result = engine.defer(id)
+        if (result.success) ExportJournal.clearStatus(id)
+        complete(result)
+    }
+
+    fun selectDraft(id: String, finished: (SegmentEditResult) -> Unit) = sessionCommand(finished) { complete ->
+        val session = store.entries().firstOrNull { it.id == id && drafts.value.any { draft -> draft.id == id } }?.session
+            ?: error("The committed metadata is unreadable. The source files are retained.")
+        val job = ExportJournal.read(application, id)
+        val retryOnly = job != null && SessionCleanup.mayHavePublished(job)
+        if (job != null) ExportJournal.restore(application, session)
+        engine.loadDraft(session, retryOnly)
+        inspectLegacyProfile()
+        complete(SegmentEditResult(true))
+    }
+
+    fun openRecovered(id: String, finished: (SegmentEditResult) -> Unit) = sessionCommand(finished) { complete ->
+        check(engine.snapshot.session?.id == id && engine.snapshot.recovery != null && !engine.snapshot.unresolved)
+        ExportJournal.retire(application, id)
+        val result = engine.openRecovered(id)
+        if (result.success) inspectLegacyProfile()
+        complete(result)
+    }
     private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(
         application, permission) == PackageManager.PERMISSION_GRANTED
     private fun engineLensMismatch() = engine.snapshot.openSession && engine.snapshot.session?.lens != boundLens
     fun start(orientation: Int?) {
+        if (state.value.session?.id in pendingCleanup.value) return
         val profile = port.profile ?: return
         if(!cameraReady || commandPending.value) return
         commandPending.value = true
         worker.execute { try { engine.start(orientation, boundLens, profile) } finally { commandPending.value = false } }
     }
-    fun resume(orientation: Int?) = worker.execute { engine.resume(orientation,port.profile) }
+    fun resume(orientation: Int?) = worker.execute {
+        if (!commandPending.value && engine.snapshot.session?.id !in pendingCleanup.value)
+            engine.resume(orientation, port.profile)
+    }
     fun pause() = worker.execute { engine.pause() }
     fun stop(origin: String, startedNanos: Long) {
         state.value.takeIf { it.state in setOf(RecordingState.Paused, RecordingState.Recording) }
             ?.session?.let { ExportTrace.begin(it.id, origin, startedNanos) }
         worker.execute {
         val session=engine.snapshot.session
+        if (commandPending.value || ExportJournal.busy || session?.id in pendingCleanup.value) return@execute
         ExportTrace.mark(session?.id, "stopWorker")
         if(session!=null && engine.snapshot.state in setOf(RecordingState.Paused,RecordingState.Recording) && !ExportJournal.busy) {
             try {
@@ -131,7 +245,11 @@ private class RecordingRuntime(private val application: Application) {
                     try { ExportService.launch(application,session.id) }
                     catch(e: Exception) { ExportJournal.busy=false;ExportJournal.update(application,session.id,ExportState.Failed,e.message) }
                 }
-            } catch(_: Exception) { ExportJournal.busy=false }
+            } catch (_: Exception) {
+                ExportJournal.busy = false
+                engine.notice("Could not prepare export. Your original clips are retained.")
+                return@execute
+            }
         }
         engine.stop()
         }

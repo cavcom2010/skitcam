@@ -59,6 +59,19 @@ class SessionFileStoreRecoveryDeviceTest {
         assertNull(store.loadLatest())
     }
 
+    @Test fun failedWriteCannotPutStaleBackupOverCommittedBase() {
+        val store = store()
+        val current = session()
+        store.save(current)
+        val metadata = metadata(current.id)
+        val stale = current.copy(state = RecordingState.Starting)
+        File(metadata.path + ".bak").writeText(SessionCodec.encode(stale))
+        assertTrue(File(metadata.path + ".new").mkdir())
+        assertThrows(Exception::class.java) { store.save(current.copy(state = RecordingState.Completed)) }
+        assertEquals(current, store.loadLatest())
+        assertEquals(stale, SessionCodec.decode(File(metadata.path + ".bak").readText()))
+    }
+
     @Test fun corruptBaseWithoutBackupFailsSafely() {
         val store = store()
         val valid = session()
@@ -68,5 +81,26 @@ class SessionFileStoreRecoveryDeviceTest {
         try { store.loadLatest() } catch (_: Exception) { failed = true }
         assertTrue(failed)
         assertTrue(metadata(valid.id).exists())
+    }
+
+    @Test fun corruptCandidateAndMissingConfirmedSourceAreRetainedAsSeparateIssues() {
+        val store = store()
+        val id = java.util.UUID.randomUUID().toString()
+        val directory = File(root, id).apply { mkdirs() }
+        val corrupt = File(directory, "segment_002.mp4").apply { writeText("incomplete mp4") }
+        val pending = PendingSegment("candidate", corrupt.path, 2)
+        val original = Session(id, 1L, 0, RecordingState.Recording,
+            listOf(Segment(1, File(directory, "segment_001.mp4").path, 1000L, 0, 0)), pending)
+        store.save(original)
+        repeat(2) {
+            val restored = store.loadCurrent()!!
+            assertEquals(original, restored)
+            val inspection = store.inspectRecovery(restored)
+            assertEquals(1, inspection.unavailableCount)
+            assertTrue(inspection.playableIds.isEmpty())
+            assertEquals(listOf(pending), inspection.candidates)
+            assertEquals("incomplete mp4", corrupt.readText())
+            assertEquals(2, store.lastAttempt(id))
+        }
     }
 }

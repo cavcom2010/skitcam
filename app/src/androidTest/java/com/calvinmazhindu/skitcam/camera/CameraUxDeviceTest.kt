@@ -161,7 +161,7 @@ class CameraUxDeviceTest {
             // UI-only failure injection; no journal/codec/MediaStore state is changed.
             inst.runOnMainSync { camera.acknowledge("ui-failure-check");ExportJournal.status.value=original.copy(state=ExportState.Failed,message="Injected presentation check") }
             await("failure presentation") { find("Could not finish video")!=null }
-            assertNotNull(find("Retry"));assertNotNull(find("New Recording"));assertNull(find("Video saved"))
+            assertNotNull(find("Retry export"));assertNotNull(find("New Recording"));assertNull(find("Video saved"))
             shot("failure-recovery")
         } finally { inst.runOnMainSync { camera.acknowledge(original.sessionId);ExportJournal.status.value=original } }
         await("camera after presentation check") { model.cameraReady && camera.streaming }

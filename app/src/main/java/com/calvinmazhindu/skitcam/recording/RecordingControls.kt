@@ -91,9 +91,11 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     val desiredPose = snapshot.session?.takeIf { snapshot.openSession }?.orientationDegrees
     val poseCorrect = pose != null && (desiredPose == null || pose == desiredPose)
     val matchesPreview = CameraOrientationPolicy.matchesDisplay(pose,orientation.displayRotation) && previewRotation==orientation.displayRotation
-    val canStart = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending
+    val battery by model.battery.collectAsStateWithLifecycle()
+    val batteryAllowsCapture = model.batteryPolicy.allowsCapture(battery)
+    val canStart = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending && batteryAllowsCapture
     val canResume = cameraGranted && cameraReady && poseCorrect && matchesPreview && !commandPending &&
-        snapshot.count < RecordingEngine.MAX_SEGMENTS
+        snapshot.count < RecordingEngine.MAX_SEGMENTS && batteryAllowsCapture
     val requestAudio = {
         if (requested && !rationale) {
             activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -116,7 +118,7 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
     LaunchedEffect(snapshot.state) {
         announcement = when (snapshot.state) {
             RecordingState.Recording -> if (snapshot.count > 1) recordingResumed else recordingStarted
-            RecordingState.Paused -> recordingPaused
+            RecordingState.Paused -> if (snapshot.message == RecordingEngine.BATTERY_PAUSED) null else recordingPaused
             RecordingState.Finalising, RecordingState.Stopping -> finishingClip
             else -> null
         }
@@ -227,14 +229,20 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.TopCenter) {
             val warning = when {
                 snapshot.state == RecordingState.Error -> snapshot.message
+                snapshot.state == RecordingState.Finalising || snapshot.state == RecordingState.Stopping ->
+                    snapshot.message ?: finishingClip
+                snapshot.state == RecordingState.Paused && snapshot.message == RecordingEngine.BATTERY_PAUSED &&
+                    !batteryAllowsCapture -> RecordingEngine.BATTERY_PAUSED
+                !batteryAllowsCapture || battery.knownPercentage == model.batteryPolicy.warningAt.toDouble() ->
+                    model.batteryPolicy.warning(battery, snapshot.state)
                 snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
                     if (desiredPose == null) stringResource(R.string.status_orientation_upright)
                     else stringResource(R.string.status_orientation_return, desiredPose)
                 snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> stringResource(R.string.status_match_preview)
                 !microphone -> if (requested) stringResource(R.string.status_microphone_off)
                     else stringResource(R.string.status_microphone_request)
-                snapshot.state == RecordingState.Finalising || snapshot.state == RecordingState.Stopping -> finishingClip
-                else -> if(snapshot.state == RecordingState.Completed) null else snapshot.message
+                else -> if(snapshot.state == RecordingState.Completed) null
+                    else snapshot.message?.takeUnless { it == RecordingEngine.BATTERY_PAUSED }
             }
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xxs)) {

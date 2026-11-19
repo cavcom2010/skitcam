@@ -111,4 +111,16 @@
     <string name="new_recording">New Recording</string>
     <string name="retry">Retry</string>
     <string name="originals_preserved">Your original recordings are preserved.</string>
+    <plurals name="discard_skit_message">
+        <item quantity="one">Your %d recorded segment will be permanently deleted. No finished video will be saved.</item>
+        <item quantity="other">Your %d recorded segments will be permanently deleted. No finished video will be saved.</item>
+    </plurals>
+    <plurals name="discard_skit_button">
+        <item quantity="one">Discard %d clip</item>
+        <item quantity="other">Discard %d clips</item>
+    </plurals>
+    <plurals name="recovered_segments">
+        <item quantity="one">%d segment recovered.</item>
+        <item quantity="other">%d segments recovered.</item>
+    </plurals>
 </resources>

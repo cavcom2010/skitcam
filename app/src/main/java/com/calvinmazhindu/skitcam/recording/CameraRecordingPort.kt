@@ -53,7 +53,9 @@ class CameraRecordingPort(private val context: Context, private val events: Exec
                 check(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     "Camera permission is required."
                 }
-                check(!File(pending.path).exists()) { "Refusing to overwrite a segment file." }
+                check(!java.nio.file.Files.exists(File(pending.path).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    "Refusing to overwrite a segment file."
+                }
                 val lock = checkNotNull(beforeStart) { "Camera screen is no longer available." }
                 lock(orientationDegrees)
                 capture.targetRotation = rotationFor(orientationDegrees)

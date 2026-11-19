@@ -31,7 +31,8 @@ data class ExportSpec(val sessionId: String, val orientation: Int, val clips: Li
         }
     }
 }
-data class ExportStatus(val sessionId: String, val state: ExportState, val message: String? = null, val uri: String? = null) {
+data class ExportStatus(val sessionId: String, val state: ExportState, val message: String? = null,
+    val uri: String? = null, val publicationUncertain: Boolean = false) {
     val active get() = state in setOf(ExportState.Preparing,ExportState.Exporting,ExportState.Verifying,ExportState.Publishing)
 }
 
