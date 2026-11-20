@@ -8,13 +8,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.calvinmazhindu.skitcam.recording.Segment
 import com.calvinmazhindu.skitcam.trim.TrimRange
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
 /**
- * Run only in a disposable .thumbvalidation installation with
+ * Run only in a disposable .thumbvalidation or .reviewcheck installation with
  * tools/thumbnail_fixtures.sh output staged in files/thumbnail-inputs.
  */
 @RunWith(AndroidJUnit4::class)
@@ -22,9 +24,13 @@ class ThumbnailReadabilityDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val source get() = File(context.filesDir, "thumbnail-inputs/darkstart.mp4")
 
-    @Test fun darkOpeningTakeStillGetsAReadableThumbnail() {
-        check(context.packageName.endsWith(".thumbvalidation")) { "Thumbnail validation package only." }
+    @Before fun checkFixture() {
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.thumbvalidation",
+            "com.calvinmazhindu.skitcam.reviewcheck")) { "Thumbnail validation package only." }
         check(source.isFile) { "Stage tools/thumbnail_fixtures.sh output in files/thumbnail-inputs first." }
+    }
+
+    @Test fun darkOpeningTakeStillGetsAReadableThumbnail() {
         val full = segment("full", 0)
         val average = averageLuma(load(full))
         Log.i("ThumbnailValidation", "Full-range thumbnail average luma: $average")
@@ -32,13 +38,18 @@ class ThumbnailReadabilityDeviceTest {
     }
 
     @Test fun trimmedRangeUsesAFrameInsideTheRetainedClip() {
-        check(context.packageName.endsWith(".thumbvalidation")) { "Thumbnail validation package only." }
-        check(source.isFile) { "Stage tools/thumbnail_fixtures.sh output in files/thumbnail-inputs first." }
         val trimmed = segment("trimmed", 1000)
         val average = averageLuma(load(trimmed))
         Log.i("ThumbnailValidation", "Trimmed-range thumbnail average luma: $average")
         assertTrue("A trimmed clip must not fall back to its excluded dark opening (average $average)",
             average >= 16)
+    }
+
+    @Test fun openingStillReusesTheShelfBitmap() {
+        val segment = segment("opening", 1000)
+        val loader = ThumbnailLoader()
+        val loaded = runBlocking { loader.load(segment) } as ThumbnailResult.Ready
+        assertSame(loaded.bitmap, loader.cached(segment))
     }
 
     private fun segment(id: String, startMs: Long) = Segment(1, source.path, 3200, 0, 0, id = id,

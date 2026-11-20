@@ -41,7 +41,7 @@ import kotlin.concurrent.thread
 import kotlin.math.abs
 
 /**
- * Run only in a disposable .trimflash installation with tools/trim_flash_fixtures.sh
+ * Run only in a disposable validation installation with tools/trim_flash_fixtures.sh
  * outputs staged in files/trim-flash-inputs. Run each method in a fresh instrumentation
  * invocation so the recording runtime restores that method's fixture. No MediaStore publication.
  */
@@ -67,7 +67,8 @@ class TrimPreviewFlashDeviceTest {
 
     @Before fun open() {
         check(context.packageName in setOf("com.calvinmazhindu.skitcam.trimflash",
-            "com.calvinmazhindu.skitcam.trimflashbaseline")) { "Trim flash validation package only." }
+            "com.calvinmazhindu.skitcam.trimflashbaseline",
+            "com.calvinmazhindu.skitcam.reviewcheck")) { "Trim flash validation package only." }
         val id = UUID.randomUUID().toString()
         val root = File(context.filesDir, "sessions/$id").apply { mkdirs() }
         val segments = listOf("first", "second").mapIndexed { index, name ->
@@ -106,6 +107,7 @@ class TrimPreviewFlashDeviceTest {
     @Test fun repeatedTapsKeepPresentedFrameAndDoNotReprepare() {
         openSegment(1)
         expectColour("initial Review", Color.RED)
+        assertFalse(main { activity.reviewController.showOpeningPoster })
         val preview = bounds("Segment 1 playback")
         Log.i("TrimFlashValidation", "Preview bounds: $preview; sample=${preview.centerX()},${preview.centerY()}")
         val initialEnd = main { player.currentMediaItem!!.clippingConfiguration.endPositionMs }
@@ -174,6 +176,7 @@ class TrimPreviewFlashDeviceTest {
     @Test fun dragPlaybackSaveResetSwitchAndExport() {
         val hashes = fixture.segments.map { sha(File(it.path)) }
         openSegment(1)
+        val initialView = main { playerView }
         tap("Trim start handle")
         await("start advances one frame") { main { trim.draft!!.trimStartMs == 40L } }
         expectPosition(40)
@@ -216,9 +219,12 @@ class TrimPreviewFlashDeviceTest {
 
         openSegment(2)
         expectColour("different segment, previously saved trim", Color.MAGENTA, "after-switch")
+        assertSame("Switching clips must not recreate the preview view", initialView, main { playerView })
+        assertFalse(main { activity.reviewController.showOpeningPoster })
         expectPosition(1040)
         openSegment(1)
         expectColour("reopening starts at the saved boundary", Color.GREEN)
+        assertSame(initialView, main { playerView })
         expectPosition(edited.trimStartMs)
         click("Play")
         await("saved clip playing") { main { player.isPlaying && player.duration == edited.effectiveDurationMs } }

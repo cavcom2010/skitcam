@@ -90,6 +90,13 @@ class SegmentReviewController(context: Context) {
                 override fun onRenderedFirstFrame() {
                     if (player === current) showOpeningPoster = false
                 }
+                override fun onSurfaceSizeChanged(width: Int, height: Int) {
+                    // Prepare immersive Review only when its real output is attached.
+                    // On the G54, preparing paused against the placeholder surface
+                    // can leave the view blank even after the player reports Ready.
+                    if (fullSource && player === current && width > 0 && height > 0 &&
+                        current.playbackState == Player.STATE_IDLE) current.prepare()
+                }
             })
             sourceFile = file
             showOpeningPoster = opening
@@ -97,7 +104,7 @@ class SegmentReviewController(context: Context) {
             current.setMediaItem(item(file, preparedRange))
             current.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             current.playWhenReady = false
-            current.prepare()
+            if (!fullSource) current.prepare()
         } catch (_: Exception) {
             error = "Cannot open this segment. The original file has not been changed."
             releasePlayer()
