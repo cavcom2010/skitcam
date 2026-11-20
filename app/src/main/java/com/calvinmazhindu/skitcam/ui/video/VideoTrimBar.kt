@@ -133,7 +133,7 @@ fun VideoTrimBar(
             description = "Trim start handle",
             frameStepMs = frameStepMs,
             stepDirection = 1L,
-            onChange = onTrimStart
+            onStep = { onDragStart(); onTrimStart(it); onDragEnd() }
         )
         TrimEdgeHandle(
             centerX = xDp(end),
@@ -144,7 +144,7 @@ fun VideoTrimBar(
             description = "Trim end handle",
             frameStepMs = frameStepMs,
             stepDirection = -1L,
-            onChange = onTrimEnd
+            onStep = { onDragStart(); onTrimEnd(it); onDragEnd() }
         )
 
         if (enabled) {
@@ -282,7 +282,7 @@ private fun TrimEdgeHandle(
     description: String,
     frameStepMs: Long,
     stepDirection: Long,
-    onChange: (Long) -> Unit
+    onStep: (Long) -> Unit
 ) {
     val offset = (centerX - 24.dp).coerceIn(0.dp, (timelineWidth - 48.dp).coerceAtLeast(0.dp))
     // Visual/semantic target only: the timeline's single gesture surface handles
@@ -293,12 +293,12 @@ private fun TrimEdgeHandle(
                 contentDescription = description
                 stateDescription = "${formatPreciseTime(value)}. Tap to step " +
                     "${if (stepDirection > 0) "later" else "earlier"} one frame; drag to adjust."
-                customActions = listOf(
+                if (enabled) customActions = listOf(
                     CustomAccessibilityAction("Move earlier one frame") {
-                        onChange((value - frameStepMs).coerceAtLeast(0)); true
+                        onStep((value - frameStepMs).coerceAtLeast(0)); true
                     },
                     CustomAccessibilityAction("Move later one frame") {
-                        onChange((value + frameStepMs).coerceIn(0L, span)); true
+                        onStep((value + frameStepMs).coerceIn(0L, span)); true
                     }
                 )
             }

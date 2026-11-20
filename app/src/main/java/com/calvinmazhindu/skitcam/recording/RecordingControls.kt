@@ -38,9 +38,34 @@ import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamSpacing
 import kotlinx.coroutines.delay
 
+/**
+ * The one status line under the controls. Pose and preview advice must never mask a
+ * hard capture block, such as a streaming preview with no video profile.
+ */
+internal fun recordingWarning(state: RecordingState, message: String?, finishing: String,
+    batteryPaused: String, batteryAllowsCapture: Boolean, batteryWarning: String?,
+    captureBlockedReason: String?, poseCorrect: Boolean, desiredPose: Int?,
+    orientationUpright: String, orientationReturn: String?,
+    matchesPreview: Boolean, matchPreview: String,
+    microphoneGranted: Boolean, microphoneRequested: Boolean,
+    microphoneOff: String, microphoneRequest: String): String? = when {
+    state == RecordingState.Error -> message
+    state == RecordingState.Finalising || state == RecordingState.Stopping -> message ?: finishing
+    state == RecordingState.Paused && message == batteryPaused && !batteryAllowsCapture -> batteryPaused
+    batteryWarning != null -> batteryWarning
+    captureBlockedReason != null &&
+        state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) -> captureBlockedReason
+    state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
+        orientationReturn ?: orientationUpright
+    state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> matchPreview
+    !microphoneGranted -> if (microphoneRequested) microphoneOff else microphoneRequest
+    else -> if (state == RecordingState.Completed) null
+        else message?.takeUnless { it == RecordingEngine.BATTERY_PAUSED }
+}
+
 @Composable
 fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, orientation: CameraOrientationController,
-    previewRotation: Int?, cameraGranted: Boolean,
+    previewRotation: Int?, cameraGranted: Boolean, captureBlockedReason: String? = null,
     showShortcuts: Boolean = false, verticalShutter: Boolean = false, modeSelector: @Composable () -> Unit = {},
     leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {},
     beforeRecording: () -> Unit = {}, onBackground: () -> Unit = beforeRecording,
@@ -227,23 +252,27 @@ fun RecordingControls(activity: ComponentActivity, model: RecordingViewModel, or
         )
         // A stable status slot keeps the shutter/lens-to-Finish position from jumping.
         Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.TopCenter) {
-            val warning = when {
-                snapshot.state == RecordingState.Error -> snapshot.message
-                snapshot.state == RecordingState.Finalising || snapshot.state == RecordingState.Stopping ->
-                    snapshot.message ?: finishingClip
-                snapshot.state == RecordingState.Paused && snapshot.message == RecordingEngine.BATTERY_PAUSED &&
-                    !batteryAllowsCapture -> RecordingEngine.BATTERY_PAUSED
-                !batteryAllowsCapture || battery.knownPercentage == model.batteryPolicy.warningAt.toDouble() ->
-                    model.batteryPolicy.warning(battery, snapshot.state)
-                snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed, RecordingState.Paused) && !poseCorrect ->
-                    if (desiredPose == null) stringResource(R.string.status_orientation_upright)
-                    else stringResource(R.string.status_orientation_return, desiredPose)
-                snapshot.state in setOf(RecordingState.Ready, RecordingState.Completed) && !matchesPreview -> stringResource(R.string.status_match_preview)
-                !microphone -> if (requested) stringResource(R.string.status_microphone_off)
-                    else stringResource(R.string.status_microphone_request)
-                else -> if(snapshot.state == RecordingState.Completed) null
-                    else snapshot.message?.takeUnless { it == RecordingEngine.BATTERY_PAUSED }
-            }
+            val warning = recordingWarning(
+                state = snapshot.state,
+                message = snapshot.message,
+                finishing = finishingClip,
+                batteryPaused = RecordingEngine.BATTERY_PAUSED,
+                batteryAllowsCapture = batteryAllowsCapture,
+                batteryWarning = if (!batteryAllowsCapture ||
+                    battery.knownPercentage == model.batteryPolicy.warningAt.toDouble())
+                    model.batteryPolicy.warning(battery, snapshot.state) else null,
+                captureBlockedReason = captureBlockedReason,
+                poseCorrect = poseCorrect,
+                desiredPose = desiredPose,
+                orientationUpright = stringResource(R.string.status_orientation_upright),
+                orientationReturn = desiredPose?.let { stringResource(R.string.status_orientation_return, it) },
+                matchesPreview = matchesPreview,
+                matchPreview = stringResource(R.string.status_match_preview),
+                microphoneGranted = microphone,
+                microphoneRequested = requested,
+                microphoneOff = stringResource(R.string.status_microphone_off),
+                microphoneRequest = stringResource(R.string.status_microphone_request)
+            )
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(SkitCamSpacing.xxs)) {
                 announcement?.let {

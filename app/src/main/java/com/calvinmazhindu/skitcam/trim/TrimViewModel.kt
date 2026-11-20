@@ -38,7 +38,6 @@ class TrimViewModel : ViewModel() {
         }
         ready = true; error = null; revision++
     }
-    fun suspendPlayback() { ready = false }
     fun fail(message: String) { error = message; ready = false }
     fun change(value: TrimRange) { if (!saving && ready && value.valid()) { draft = value; error = null } }
     fun settled() { revision++ }

@@ -419,7 +419,8 @@ internal fun MainActivity.CameraScreen() {
                 dockWidth=dockWidth,
                 arranging=finishing,
                 streaming=camera.streaming,
-                boundLabel=camera.boundInfo?.concise ?: stringResource(R.string.camera_unavailable),
+                boundLabel=camera.boundInfo?.concise ?: stringResource(
+                    if (camera.streaming) R.string.camera_preview_only else R.string.camera_unavailable),
                 lensLabel=lensLabel,
                 aspectRatio=camera.photoAspectRatio,
                 aspectMenuExpanded=photoRatioMenu,
@@ -508,6 +509,8 @@ internal fun MainActivity.CameraScreen() {
                     )
                 } else {
                     RecordingControls(this@CameraScreen, recordingModel, orientation, previewRotation=camera.previewDisplayRotation, cameraGranted = granted && !camera.switching,
+                captureBlockedReason = if (camera.streaming && recordingModel.port.profile == null)
+                    camera.video.message ?: stringResource(R.string.status_capture_unavailable) else null,
                 showShortcuts = true, verticalShutter = landscape, modeSelector = modeSelector,
                 leading = { MediaShortcut(camera.latestUri,camera.latestType,recentEnabled,::openMedia) },
                 trailing = { LensSwitch(camera.choice.lens==CameraLens.Front,maySwitch && camera.hasOtherLens) { selectCamera(lens=if(camera.choice.lens==CameraLens.Rear) CameraLens.Front else CameraLens.Rear) } },

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -33,6 +34,7 @@ fun VideoSurface(
     contentDescription: String,
     modifier: Modifier = Modifier,
     fallbackAspect: Float = 9f / 16f,
+    trimPreview: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {}
 ) {
     BoxWithConstraints(modifier) {
@@ -43,22 +45,34 @@ fun VideoSurface(
                 .align(Alignment.Center)
                 .background(SkitCamColors.Ink)
         ) {
-            if (player != null) {
+            if (player != null) key(if (trimPreview) player else Unit) {
                 AndroidView(
                     factory = { context ->
-                        (LayoutInflater.from(context)
-                            .inflate(R.layout.segment_player, FrameLayout(context), false) as PlayerView).apply {
+                        // Use Media3's native SurfaceView for the trim preview. On the G54
+                        // the TextureView can stay empty after a paused first-frame render.
+                        val view = if (trimPreview) PlayerView(context).apply {
+                            id = R.id.segment_player
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                            setEnableComposeSurfaceSyncWorkaround(true)
+                            setKeepContentOnPlayerReset(true)
+                        } else LayoutInflater.from(context)
+                            .inflate(R.layout.segment_player, FrameLayout(context), false) as PlayerView
+                        view.apply {
                             setShowNextButton(false)
                             setShowPreviousButton(false)
                             setShowFastForwardButton(false)
                             setShowRewindButton(false)
                             useController = false
-                            this.contentDescription = contentDescription
-                            this.player = player
                         }
                     },
-                    update = { it.player = player },
-                    onRelease = { it.player = null },
+                    update = {
+                        it.contentDescription = contentDescription
+                        it.player = player
+                    },
+                    onRelease = {
+                        it.setKeepContentOnPlayerReset(false)
+                        it.player = null
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }

@@ -42,6 +42,11 @@ class SegmentReviewController(context: Context) {
     var videoAspect by mutableStateOf<Float?>(null)
         private set
     private var generation = 0
+    // Player positions are relative to the item actually prepared, not the trim draft.
+    private var preparedRange: TrimRange? = null
+    private var sourceFile: File? = null
+    val sourcePositionMs: Long?
+        get() = player?.let { it.currentPosition + (preparedRange?.trimStartMs ?: 0L) }
 
     fun open(sessionId: String, segment: Segment, fullSource: Boolean = false) {
         close()
@@ -79,7 +84,9 @@ class SegmentReviewController(context: Context) {
                     if (player === current) videoAspect = aspect(videoSize)
                 }
             })
-            current.setMediaItem(item(file, if (fullSource) null else segment.trim?.takeIf { it.valid() }))
+            sourceFile = file
+            preparedRange = if (fullSource) null else segment.trim?.takeIf { it.valid() && it.isTrimmed }
+            current.setMediaItem(item(file, preparedRange))
             current.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             current.playWhenReady = false
             current.prepare()
@@ -94,21 +101,52 @@ class SegmentReviewController(context: Context) {
             .setStartPositionMs(it.trimStartMs).setEndPositionMs(it.trimEndMs).build()) }
         return builder.build()
     }
-    /**
-     * Rebuilds the clipped preview while preserving an absolute source position.
-     * Without [sourcePositionMs], preview starts at the retained range's beginning.
-     */
-    fun clip(segment: Segment, range: TrimRange, sourcePositionMs: Long? = null) {
-        if (!range.valid()) return
-        player?.let {
-            val resumeAt = sourcePositionMs?.let { source ->
-                (source - range.trimStartMs).coerceIn(0L, range.effectiveDurationMs)
-            }
-            it.pause()
-            it.setMediaItem(item(File(segment.path), range))
-            it.prepare()
-            if (resumeAt != null) it.seekTo(resumeAt)
+    /** Keep the frame under the playhead if it is still part of the edited range. */
+    fun previewTrim(range: TrimRange, anchorMs: Long?, frameStepMs: Long) {
+        val position = sourcePositionMs ?: return
+        val target = anchorMs ?: position
+        if (target == position && position >= range.trimStartMs && position < range.trimEndMs &&
+            preparedRange?.let { position >= it.trimEndMs } != true) return
+        seekTrim(range, target, frameStepMs)
+    }
+
+    fun seekTrim(range: TrimRange, sourceMs: Long, frameStepMs: Long) {
+        val current = player ?: return
+        // Seeking to the exclusive end can end the player without rendering a frame.
+        val lastFrame = (range.trimEndMs - frameStepMs).coerceAtLeast(range.trimStartMs)
+        val target = sourceMs.coerceIn(range.trimStartMs, lastFrame)
+        if (current.playbackState == Player.STATE_ENDED) current.pause()
+        val prepared = preparedRange
+        if (prepared != null && (target < prepared.trimStartMs || target >= prepared.trimEndMs)) {
+            // Reset can expose frames outside the previously played clip.
+            prepareAt(current, if (current.playWhenReady) range.takeIf { it.isTrimmed } else null, target)
+        } else if (target != sourcePositionMs) {
+            current.seekTo(target - (prepared?.trimStartMs ?: 0L))
         }
+    }
+
+    fun toggleTrimPlayback(range: TrimRange) {
+        val current = player ?: return
+        val ended = current.playbackState == Player.STATE_ENDED
+        if (current.playWhenReady && !ended) {
+            current.pause()
+            return
+        }
+        val position = sourcePositionMs ?: range.trimStartMs
+        val target = if (ended || position >= range.trimEndMs) range.trimStartMs
+            else position.coerceAtLeast(range.trimStartMs)
+        val clip = range.takeIf { it.isTrimmed }
+        // Enforce the exact boundaries in Media3 before playback can advance.
+        if (clip != preparedRange) prepareAt(current, clip, target)
+        else if (ended || target != position) current.seekTo(target - (clip?.trimStartMs ?: 0L))
+        current.play()
+    }
+
+    private fun prepareAt(current: ExoPlayer, range: TrimRange?, sourceMs: Long) {
+        val file = sourceFile ?: return
+        preparedRange = range
+        current.setMediaItem(item(file, range), sourceMs - (range?.trimStartMs ?: 0L))
+        current.prepare()
     }
     fun decide(model: RecordingViewModel, kept: Boolean) {
         val selected = selection ?: return
@@ -142,6 +180,8 @@ class SegmentReviewController(context: Context) {
     private fun releasePlayer() {
         val previous = player
         player = null // Ignore callbacks caused by releasing this instance.
+        preparedRange = null
+        sourceFile = null
         previous?.release() // Also abandons ExoPlayer's audio focus before CameraX starts.
     }
     fun close() {

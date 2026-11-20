@@ -72,13 +72,11 @@ import com.calvinmazhindu.skitcam.ui.video.rememberVideoPlaybackState
 import com.calvinmazhindu.skitcam.ui.video.segmentVideoAspect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import kotlin.math.abs
 
 @Composable
 fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingViewModel,
@@ -311,18 +309,9 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     val range = trim.draft
     val frameStepMs = remember(segment.id) { frameStepMs(segment.media?.averageFps) }
     var confirmAction by remember(segment.id) { mutableStateOf<(() -> Unit)?>(null) }
-    // Absolute source position to restore after the clipped preview is rebuilt.
-    var pendingSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
-    // Keeps the marker steady while ExoPlayer applies a pending seek.
-    var heldSourcePosition by remember(segment.id) { mutableStateOf<Long?>(null) }
     // Absolute source position captured when a trim gesture begins. The marker must
     // not move while the edge under the finger changes the retained range.
     var trimAnchor by remember(segment.id) { mutableStateOf<Long?>(null) }
-    fun noteSourcePosition(range: TrimRange) {
-        val playerPosition = review.player?.currentPosition ?: 0L
-        pendingSourcePosition = (range.trimStartMs + playerPosition)
-            .coerceIn(range.trimStartMs, range.trimEndMs)
-    }
     val closeReview = {
         trim.close()
         review.close()
@@ -330,18 +319,14 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     fun navigate(action: () -> Unit) {
         if (trim.dirty) confirmAction = action else action()
     }
-    fun togglePlayback() {
-        val player = review.player ?: return
-        if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
-        if (player.isPlaying) player.pause() else player.play()
-    }
     LaunchedEffect(segment.id, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             try {
-                trim.suspendPlayback()
                 if (trim.segment?.id != segment.id || trim.sessionId != session.id) {
                     trim.open(session, segment)
                 }
+                // Resolve once against the full source, not a clipped duration on resume.
+                if (trim.ready) return@repeatOnLifecycle
                 val facts = withContext(Dispatchers.IO) {
                     SessionFileStore(File(segment.path).parentFile!!.parentFile!!).sourceFacts(segment.path)
                 }
@@ -363,28 +348,14 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             } catch (e: Exception) {
                 trim.fail(e.message ?: "Cannot prepare trim.")
             }
-            awaitCancellation()
         }
     }
-    LaunchedEffect(trim.revision, trim.ready) {
+    LaunchedEffect(segment.id, trim.revision, trim.ready) {
         val current = trim.draft
         if (trim.ready && current?.valid() == true) {
-            val target = pendingSourcePosition
-            pendingSourcePosition = null
-            review.clip(segment, current, target)
-            if (target != null) {
-                heldSourcePosition = target.coerceIn(current.trimStartMs, current.trimEndMs)
-            }
+            review.previewTrim(current, trimAnchor, frameStepMs)
             trimAnchor = null
         }
-    }
-    LaunchedEffect(playback.positionMs, review.player?.playbackState, trim.draft) {
-        val held = heldSourcePosition ?: return@LaunchedEffect
-        val current = trim.draft ?: return@LaunchedEffect
-        val player = review.player ?: return@LaunchedEffect
-        if (player.playbackState !in setOf(Player.STATE_READY, Player.STATE_ENDED)) return@LaunchedEffect
-        val expected = (held - current.trimStartMs).coerceIn(0L, current.effectiveDurationMs)
-        if (abs(player.currentPosition - expected) <= 120L) heldSourcePosition = null
     }
     BackHandler { navigate(closeReview) }
     @Composable
@@ -400,7 +371,6 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             color = SkitCamColors.TextSecondary)
     }
     fun resetTrim() {
-        trim.draft?.let(::noteSourcePosition)
         review.player?.pause()
         trim.reset()
     }
@@ -418,15 +388,14 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     }
     @Composable
     fun videoControls(modifier: Modifier = Modifier, progressOnOwnRow: Boolean = false) {
-        val activeRange = range?.takeIf { trim.ready }
-        val calculatedSource = if (activeRange != null) {
-            (activeRange.trimStartMs + playback.positionMs).coerceIn(0L, activeRange.sourceDurationMs)
-        } else playback.positionMs
-        val sourcePosition = trimAnchor?.coerceIn(activeRange?.trimStartMs ?: 0L,
-            activeRange?.trimEndMs ?: Long.MAX_VALUE)
-            ?: activeRange?.let { current ->
-                heldSourcePosition?.coerceIn(current.trimStartMs, current.trimEndMs)
-            } ?: calculatedSource
+        val activeRange = range?.takeIf { trim.ready && it.valid() }
+        val rawSourcePosition = trimAnchor ?: review.sourcePositionMs ?: playback.positionMs
+        val sourcePosition = activeRange?.let { rawSourcePosition.coerceIn(it.trimStartMs, it.trimEndMs) }
+            ?: rawSourcePosition
+        fun seek(sourceMs: Long) {
+            trimAnchor = null
+            activeRange?.let { review.seekTrim(it, sourceMs, frameStepMs) }
+        }
         val trimProgress: (@Composable (Modifier) -> Unit)? = if (activeRange != null) {
             { progressModifier ->
                 VideoTrimBar(
@@ -435,31 +404,14 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                     trimStartMs = activeRange.trimStartMs,
                     trimEndMs = activeRange.trimEndMs,
                     enabled = !trim.saving && trim.error == null,
-                    onSeek = { sourceMs ->
-                        heldSourcePosition = null
-                        trimAnchor = null
-                        review.player?.seekTo((sourceMs - activeRange.trimStartMs).coerceAtLeast(0L))
-                    },
-                    onTrimStart = { ms ->
-                        // Keep the marker on the source frame the user was watching.
-                        val anchor = trimAnchor
-                        if (anchor != null) pendingSourcePosition =
-                            anchor.coerceIn(activeRange.trimStartMs, activeRange.trimEndMs)
-                        else noteSourcePosition(activeRange)
-                        trim.change(activeRange.start(ms))
-                    },
-                    onTrimEnd = { ms ->
-                        val anchor = trimAnchor
-                        if (anchor != null) pendingSourcePosition =
-                            anchor.coerceIn(activeRange.trimStartMs, activeRange.trimEndMs)
-                        else noteSourcePosition(activeRange)
-                        trim.change(activeRange.end(ms))
-                    },
+                    onSeek = { seek(it) },
+                    onTrimStart = { ms -> trim.draft?.let { trim.change(it.start(ms)) } },
+                    onTrimEnd = { ms -> trim.draft?.let { trim.change(it.end(ms)) } },
                     frameStepMs = frameStepMs,
                     onDragStart = {
                         review.player?.pause()
                         // Same source as the drawn marker, so it stays exactly put.
-                        if (trimAnchor == null) trimAnchor = activeRange.trimStartMs + playback.positionMs
+                        if (trimAnchor == null) trimAnchor = review.sourcePositionMs
                     },
                     onDragEnd = { trim.settled() },
                     modifier = progressModifier
@@ -470,20 +422,10 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
             playing = playback.playing,
             positionMs = sourcePosition,
             durationMs = activeRange?.sourceDurationMs ?: playback.durationMs,
-            enabled = review.player != null && review.error == null,
-            onPlayPause = ::togglePlayback,
-            onJumpToStart = {
-                heldSourcePosition = null
-                trimAnchor = null
-                review.player?.seekTo(0)
-            },
-            onSeek = { sourceMs ->
-                heldSourcePosition = null
-                trimAnchor = null
-                val current = trim.draft
-                if (current != null) review.player?.seekTo((sourceMs - current.trimStartMs).coerceAtLeast(0L))
-                else review.player?.seekTo(sourceMs)
-            },
+            enabled = activeRange != null && review.player != null && review.error == null,
+            onPlayPause = { activeRange?.let(review::toggleTrimPlayback) },
+            onJumpToStart = { activeRange?.let { seek(it.trimStartMs) } },
+            onSeek = { seek(it) },
             overlay = true,
             seekContentDescription = "Seek segment ${segment.order}",
             progressContent = trimProgress,
@@ -503,7 +445,8 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
         )
     }
     fun select(item: Segment) {
-        if (item.id != segment.id) navigate { onOpenSegment(item) }
+        // Shelf callbacks can outlive a recomposition; check the live selection.
+        if (item.id != review.selection?.segmentId) navigate { onOpenSegment(item) }
     }
     val safePlayFrom: (Segment) -> (() -> Unit)? = { item -> if (trim.dirty) null else playFrom(item) }
     ImmersiveVideoScaffold {
@@ -519,7 +462,8 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                         player = review.player,
                         aspect = aspect,
                         contentDescription = "Segment ${segment.order} playback",
-                        modifier = Modifier.fillMaxSize().padding(6.dp)
+                        modifier = Modifier.fillMaxSize().padding(6.dp),
+                        trimPreview = true
                     )
                     videoMessages(Modifier.align(Alignment.TopStart))
                     videoControls(Modifier.align(Alignment.BottomCenter))
@@ -556,7 +500,8 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                         player = review.player,
                         aspect = aspect,
                         contentDescription = "Segment ${segment.order} playback",
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxSize(),
+                        trimPreview = true
                     )
                     // Status/error text overlays the preview rather than resizing it.
                     videoMessages(Modifier.align(Alignment.TopStart))
