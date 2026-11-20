@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -45,7 +44,7 @@ fun VideoSurface(
                 .align(Alignment.Center)
                 .background(SkitCamColors.Ink)
         ) {
-            if (player != null) key(if (trimPreview) player else Unit) {
+            if (player != null) {
                 AndroidView(
                     factory = { context ->
                         // Use Media3's native SurfaceView for the trim preview. On the G54
@@ -67,7 +66,10 @@ fun VideoSurface(
                     },
                     update = {
                         it.contentDescription = contentDescription
-                        it.player = player
+                        // Keep one surface for the whole Review so switching clips does not
+                        // expose an empty surface before the next decoder's first frame.
+                        it.setKeepContentOnPlayerReset(trimPreview && player != null)
+                        if (it.player !== player) it.player = player
                     },
                     onRelease = {
                         it.setKeepContentOnPlayerReset(false)
