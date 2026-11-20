@@ -28,6 +28,17 @@ class ThumbnailLoader {
         override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
         // Do not recycle evicted bitmaps: a visible Compose image may still reference them.
     }
+    /** Cache-only lookup, so Review can show a still on its first composition. */
+    fun cached(segment: Segment): Bitmap? {
+        val file = File(segment.path)
+        if (!file.isFile || !file.canRead() || file.length() == 0L) return null
+        val range = segment.trim?.takeIf { it.valid() }
+        return cache.get(cacheKey(file, range?.trimStartMs ?: 0L, range?.trimEndMs ?: segment.durationMs))
+    }
+
+    private fun cacheKey(file: File, start: Long, end: Long) =
+        "${file.path}:${file.length()}:${file.lastModified()}:$start:$end"
+
     /** Thumbnail of the retained range, avoiding an empty-looking opening frame. */
     suspend fun load(segment: Segment): ThumbnailResult = withContext(Dispatchers.IO) {
         decoder.withPermit {
@@ -38,7 +49,7 @@ class ThumbnailLoader {
             val start = range?.trimStartMs ?: 0L
             val end = range?.trimEndMs ?: segment.durationMs
             val times = thumbnailSampleTimes(start, end)
-            val key = "${segment.path}:${file.length()}:${file.lastModified()}:$start:$end"
+            val key = cacheKey(file, start, end)
             cache.get(key)?.let { return@withPermit ThumbnailResult.Ready(it) }
             val retriever = MediaMetadataRetriever()
             try {

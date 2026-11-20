@@ -75,6 +75,7 @@
     <string name="status_ready_to_record">Ready to record</string>
     <string name="photo_ready">Photo ready</string>
     <string name="status_match_preview">Match the preview orientation</string>
+    <string name="review_loading_video">Loading video…</string>
     <string name="status_capture_unavailable">Preview only. The camera cannot start video recording.</string>
     <string name="camera_preview_only">Preview only</string>
     <string name="status_orientation_upright">Turn the phone upright to record.</string>

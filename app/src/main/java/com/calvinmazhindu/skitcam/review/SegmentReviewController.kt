@@ -41,8 +41,8 @@ class SegmentReviewController(context: Context) {
         private set
     var videoAspect by mutableStateOf<Float?>(null)
         private set
-    /** False until the attached player has presented its first frame for this media item. */
-    var firstFrameRendered by mutableStateOf(false)
+    /** Only cold Review entry needs a loading still; switches reuse the active surface. */
+    var showOpeningPoster by mutableStateOf(false)
         private set
     private var generation = 0
     // Player positions are relative to the item actually prepared, not the trim draft.
@@ -52,6 +52,7 @@ class SegmentReviewController(context: Context) {
         get() = player?.let { it.currentPosition + (preparedRange?.trimStartMs ?: 0L) }
 
     fun open(sessionId: String, segment: Segment, fullSource: Boolean = false) {
+        val opening = selection == null
         close()
         selection = ReviewSelection(sessionId, segment.id)
         videoAspect = null
@@ -87,11 +88,11 @@ class SegmentReviewController(context: Context) {
                     if (player === current) videoAspect = aspect(videoSize)
                 }
                 override fun onRenderedFirstFrame() {
-                    if (player === current) firstFrameRendered = true
+                    if (player === current) showOpeningPoster = false
                 }
             })
             sourceFile = file
-            firstFrameRendered = false
+            showOpeningPoster = opening
             preparedRange = if (fullSource) null else segment.trim?.takeIf { it.valid() && it.isTrimmed }
             current.setMediaItem(item(file, preparedRange))
             current.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
@@ -151,7 +152,6 @@ class SegmentReviewController(context: Context) {
 
     private fun prepareAt(current: ExoPlayer, range: TrimRange?, sourceMs: Long) {
         val file = sourceFile ?: return
-        firstFrameRendered = false
         preparedRange = range
         current.setMediaItem(item(file, range), sourceMs - (range?.trimStartMs ?: 0L))
         current.prepare()
@@ -188,7 +188,7 @@ class SegmentReviewController(context: Context) {
     private fun releasePlayer() {
         val previous = player
         player = null // Ignore callbacks caused by releasing this instance.
-        firstFrameRendered = false
+        showOpeningPoster = false
         preparedRange = null
         sourceFile = null
         previous?.release() // Also abandons ExoPlayer's audio focus before CameraX starts.

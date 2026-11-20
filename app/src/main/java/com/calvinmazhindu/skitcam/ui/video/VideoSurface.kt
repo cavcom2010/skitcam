@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,7 +40,6 @@ fun VideoSurface(
     fallbackAspect: Float = 9f / 16f,
     trimPreview: Boolean = false,
     poster: android.graphics.Bitmap? = null,
-    showPoster: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {}
 ) {
     BoxWithConstraints(modifier) {
@@ -82,11 +83,12 @@ fun VideoSurface(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
-                // Hold the clip's own first frame over the surface until the player
-                // presents a decoded frame. Never masks a failed or closed player.
-                if (showPoster && poster != null && player != null) {
+                // A shelf thumbnail is a loading still, not the current playhead.
+                if (poster != null) {
                     Image(poster.asImageBitmap(), contentDescription = null,
-                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    Text(stringResource(R.string.review_loading_video),
+                        Modifier.align(Alignment.TopCenter).background(SkitCamColors.Ink))
                 }
             }
             overlay()
