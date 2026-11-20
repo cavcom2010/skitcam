@@ -6,8 +6,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +37,8 @@ fun VideoSurface(
     modifier: Modifier = Modifier,
     fallbackAspect: Float = 9f / 16f,
     trimPreview: Boolean = false,
+    poster: android.graphics.Bitmap? = null,
+    showPoster: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {}
 ) {
     BoxWithConstraints(modifier) {
@@ -77,6 +82,12 @@ fun VideoSurface(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+                // Hold the clip's own first frame over the surface until the player
+                // presents a decoded frame. Never masks a failed or closed player.
+                if (showPoster && poster != null && player != null) {
+                    Image(poster.asImageBitmap(), contentDescription = null,
+                        modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
             }
             overlay()
         }

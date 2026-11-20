@@ -306,6 +306,11 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
     val density = LocalDensity.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val playback = rememberVideoPlaybackState(review.player)
+    // First frame of the selected clip, shown over the surface until a decoded
+    // frame arrives so placing a clip never flashes an empty surface.
+    val poster by produceState<android.graphics.Bitmap?>(null, segment.id, segment.path) {
+        value = (loader.load(segment) as? ThumbnailResult.Ready)?.bitmap
+    }
     val range = trim.draft
     val frameStepMs = remember(segment.id) { frameStepMs(segment.media?.averageFps) }
     var confirmAction by remember(segment.id) { mutableStateOf<(() -> Unit)?>(null) }
@@ -463,7 +468,9 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                         aspect = aspect,
                         contentDescription = "Segment ${segment.order} playback",
                         modifier = Modifier.fillMaxSize().padding(6.dp),
-                        trimPreview = true
+                        trimPreview = true,
+                        poster = poster,
+                        showPoster = !review.firstFrameRendered && review.error == null
                     )
                     videoMessages(Modifier.align(Alignment.TopStart))
                     videoControls(Modifier.align(Alignment.BottomCenter))
@@ -501,7 +508,9 @@ private fun ImmersiveReview(session: Session, segment: Segment, model: Recording
                         aspect = aspect,
                         contentDescription = "Segment ${segment.order} playback",
                         modifier = Modifier.fillMaxSize(),
-                        trimPreview = true
+                        trimPreview = true,
+                        poster = poster,
+                        showPoster = !review.firstFrameRendered && review.error == null
                     )
                     // Status/error text overlays the preview rather than resizing it.
                     videoMessages(Modifier.align(Alignment.TopStart))
