@@ -101,7 +101,8 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var undo by remember { mutableStateOf<Segment?>(null) }
-    val playEnabled = session.retainedCount > 0 && session.validPlaybackOrder()
+    val summary = SegmentSummary.from(session)
+    val playEnabled = summary.kept > 0 && session.validPlaybackOrder()
     fun decide(item: Segment, kept: Boolean) {
         if (review.saving) return
         review.decideById(model, session.id, item.id, kept) { result ->
@@ -155,10 +156,7 @@ fun PausedEnvironment(session: Session, landscape: Boolean, model: RecordingView
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        val clipCount = session.segments.size
-                        Text("${session.retainedCount} kept · $clipCount ${if (clipCount == 1) "clip" else "clips"}",
-                            Modifier.weight(1f).background(SkitCamColors.Ink.copy(alpha=.9f), MaterialTheme.shapes.small)
-                                .padding(6.dp), style = MaterialTheme.typography.labelMedium)
+                        SegmentSummaryBar(summary, Modifier.weight(1f))
                         SkitCamIconAction(CameraIcon.PlayFromStart, stringResource(R.string.play_skit),
                             onClick = { onPlayFromBeginning?.invoke() },
                             enabled = playEnabled && onPlayFromBeginning != null && !review.saving)

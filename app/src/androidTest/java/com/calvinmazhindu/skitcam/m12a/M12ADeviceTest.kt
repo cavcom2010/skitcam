@@ -183,7 +183,7 @@ class M12ADeviceTest {
         assertFalse(main { activity.playback.finished })
         assertTrue(main { activity.playback.plan!!.clips.none { it.order in listOf(1, 2) } })
         screenshot("five-clip-loop-wrap")
-        click { it.text?.toString()?.startsWith("Loop from clip") == true }
+        description("Turn loop off")
         await("loop off") { !main { activity.playback.loop } }
         await("playback stops after segment 5", 20_000L) { main { activity.playback.finished } }
         assertEquals(listOf(3, 4, 5), main { activity.playback.plan!!.clips.map { it.order } })
@@ -300,7 +300,7 @@ class M12ADeviceTest {
         await("playback released before resume") {
             main { activity.playback.player == null && activity.playback.plan == null }
         }
-        click { it.text?.toString() == "RESUME" }
+        description("Resume recording")
         state(RecordingState.Recording)
         assertNull(main { activity.playback.player })
         assertNull(main { activity.playback.plan })

@@ -131,6 +131,15 @@ class SkitPlaybackController(context: Context) {
 
     fun seekTo(positionMs: Long) { player?.seekTo(positionMs.coerceAtLeast(0)) }
 
+    /** Jump within the loaded playlist without changing its anchor or play/pause intent. */
+    fun seekToSegment(index: Int) {
+        val current = player ?: return
+        if (index !in 0 until current.mediaItemCount ||
+            !current.isCommandAvailable(Player.COMMAND_SEEK_TO_MEDIA_ITEM)) return
+        finished = false
+        current.seekTo(index, 0)
+    }
+
     /** Stops and releases playback but leaves the error/notice state visible for the UI. */
     fun stopWithNotice(message: String) {
         if (error != null) return

@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -38,6 +39,11 @@ fun SkitPlaybackScreen(controller: SkitPlaybackController, modifier: Modifier = 
                 closeContentDescription = "Close playback",
                 onClose = onClose
             )
+            if (plan != null && controller.player != null) {
+                key(plan) {
+                    PlaybackSegmentRail(plan.clips, controller.currentIndex, controller::seekToSegment)
+                }
+            }
             controller.error?.let {
                 Text(it, color = SkitCamColors.Error, style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)

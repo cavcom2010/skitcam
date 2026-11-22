@@ -53,6 +53,17 @@
     <string name="restore_segment">Restore segment</string>
     <string name="play_skit">Play skit from beginning</string>
     <string name="play_from_here">Play from here</string>
+    <string name="segment_summary_description">%1$d kept, %2$d discarded</string>
+    <string name="segment_summary_kept">✓ %1$d kept</string>
+    <string name="segment_summary_kept_short">✓ %1$d</string>
+    <string name="segment_summary_discarded">− %1$d discarded</string>
+    <string name="segment_summary_discarded_short">− %1$d</string>
+    <string name="segment_summary_empty">No recorded segments</string>
+    <string name="playback_segment_rail">Playback segments</string>
+    <string name="playback_segment_position">Clip %1$d</string>
+    <string name="playback_segment_current">Current clip</string>
+    <string name="playback_segment_completed">Completed</string>
+    <string name="playback_segment_upcoming">Upcoming</string>
     <string name="refresh_gallery">Refresh gallery</string>
     <string name="open_media">Open saved media gallery</string>
     <string name="switch_to_front">Switch to front camera</string>
