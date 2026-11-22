@@ -34,6 +34,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.compose.ui.res.stringResource
 import com.calvinmazhindu.skitcam.R
+import com.calvinmazhindu.skitcam.playback.PlaybackDiagnostics
+import com.calvinmazhindu.skitcam.playback.PlaybackScreen
 import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusBanner
 import com.calvinmazhindu.skitcam.ui.components.SkitCamStatusTone
 import com.calvinmazhindu.skitcam.ui.theme.SkitCamColors
@@ -171,16 +173,18 @@ class FinishedPlaybackActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         val uri=intent.data ?: return finish()
-        player=ExoPlayer.Builder(this).build().also {
-            view.player=it
-            it.setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(androidx.media3.common.C.USAGE_MEDIA).setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
-            it.addListener(object : androidx.media3.common.Player.Listener {
+        player=ExoPlayer.Builder(this).build().also { current ->
+            view.player=current
+            current.setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(androidx.media3.common.C.USAGE_MEDIA).setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
+            val diagnostics = PlaybackDiagnostics(PlaybackScreen.SAVED)
+            current.addListener(diagnostics)
+            current.addListener(object : androidx.media3.common.Player.Listener {
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    android.util.Log.e("SkitCamPlayback", "Finished video playback failed", error)
-                     playbackError="Finished video is unavailable. Original recordings are preserved."
+                    if (player === current) diagnostics.report(current, error)
+                    playbackError="Finished video is unavailable. Original recordings are preserved."
                 }
             })
-            it.setMediaItem(MediaItem.fromUri(uri));it.seekTo(resumeAt);it.playWhenReady=resumePlaying;it.prepare()
+            current.setMediaItem(MediaItem.fromUri(uri));current.seekTo(resumeAt);current.playWhenReady=resumePlaying;current.prepare()
         }
     }
     private fun share() {

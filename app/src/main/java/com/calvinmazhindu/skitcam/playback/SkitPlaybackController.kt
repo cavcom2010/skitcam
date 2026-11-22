@@ -74,6 +74,8 @@ class SkitPlaybackController(context: Context) {
             .build(), true)
         current.setSeekParameters(SeekParameters.EXACT)
         current.repeatMode = if (loop) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+        val diagnostics = PlaybackDiagnostics(PlaybackScreen.SKIT)
+        current.addListener(diagnostics)
         current.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 val currentPlan = plan ?: return
@@ -97,7 +99,7 @@ class SkitPlaybackController(context: Context) {
 
             override fun onPlayerError(playbackException: PlaybackException) {
                 if (player !== current) return
-                android.util.Log.w("SkitCamPlayback", "Skit playlist playback failed", playbackException)
+                diagnostics.report(current, playbackException)
                 releasePlayer()
                 finished = true
                 error = "Playback stopped because a clip could not be played. The skit and original files were not changed."

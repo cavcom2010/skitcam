@@ -28,7 +28,8 @@ import org.junit.runner.RunWith
 class SegmentSummaryBarDeviceTest {
     @Test fun narrowLargeTextPreservesOnePercentAndFullAccessibilitySummary() {
         val instrument = InstrumentationRegistry.getInstrumentation()
-        check(instrument.targetContext.packageName == "com.calvinmazhindu.skitcam.m142validation")
+        check(instrument.targetContext.packageName in setOf("com.calvinmazhindu.skitcam.m142validation",
+            "com.calvinmazhindu.skitcam.m15avalidation"))
         val summary = mutableStateOf(SegmentSummary(99, 1))
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->

@@ -68,7 +68,9 @@ class TrimPreviewFlashDeviceTest {
     @Before fun open() {
         check(context.packageName in setOf("com.calvinmazhindu.skitcam.trimflash",
             "com.calvinmazhindu.skitcam.trimflashbaseline",
-            "com.calvinmazhindu.skitcam.reviewcheck")) { "Trim flash validation package only." }
+            "com.calvinmazhindu.skitcam.reviewcheck", "com.calvinmazhindu.skitcam.m15avalidation")) {
+            "Trim flash validation package only."
+        }
         val id = UUID.randomUUID().toString()
         val root = File(context.filesDir, "sessions/$id").apply { mkdirs() }
         val segments = listOf("first", "second").mapIndexed { index, name ->

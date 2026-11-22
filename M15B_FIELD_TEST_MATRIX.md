@@ -1,0 +1,33 @@
+# M15B physical-device test matrix
+
+Field-test plan only. Do not start M15B code changes until M15A has been reviewed.
+
+## Setup and evidence
+
+- Run the core matrix on the Moto G54 5G (Android 15/API 35), then on an Android 14–16 device with a different chipset and documented 4K capability. Add an API 26–28 device, if available, for the legacy storage-permission and Gallery paths. Record the exact model, OS build, app commit, validation APK SHA-256, reported/actual capture profile, and microphone type. Mark unsupported combinations **N/A** with the reason; do not count them as passes.
+- Use a **fresh, explicitly isolated** validation package per run or device batch, never the production installation. Build both debug APKs with `-PvalidationSuffix=.m15bvalidation` (use a new suffix if already installed and select compatible tests explicitly). Do not clear an existing app’s data. Confirm the target with `adb devices -l` and always use `adb -s SERIAL`. Capture only disposable material: a colour chart and a clap or flash-and-beep source with clear audio/video timing markers. Do not share recordings, full Logcat, or private paths.
+- For tests that stop a process, corrupt media, or simulate low storage, use only owned fixtures and the isolated package. Never fill a phone’s shared volume, change partitions, or remove existing recordings. Do not run anything destructive if the named package or fixture ownership cannot be confirmed.
+- Record **PASS / FAIL / BLOCKED / N/A** per row and device, with test conditions and evidence. Separate timestamp measurements from subjective results. A readable MP4 alone does not establish audible sync.
+
+## Automated or machine-checked
+
+| ID | Steps on each supported device | Evidence / pass criteria |
+|---|---|---|
+| A1 | Run JVM and lint gates. Run the fixture-based Review frame tests, summary/rail navigation checks, corrupt-source playback, and AtomicFile recovery under a test-compatible isolated ID. | Exit status, instrumentation counts and any failures; no silent omissions. Stable Review preview and unchanged source hashes. Rail follows saved kept order, centres the active item, and does not prevent swiping. |
+| A2 | In each of portrait and landscape, record 10 clips of 2–5 s at 1080p. Discard two, restore one, trim and reorder one, and Play Skit. Close playback, append a segment, then export. Repeat the session three times. | Distinct committed source files, correct clip order and keep/discard counts; no repeated output or stale player. Decode the audio and video tracks completely. Verify orientation, dimensions, timestamps, source SHA-256, and a single visible Gallery item per job. |
+| A3 | At 1080p, capture two 3–5 min takes. Repeat one portrait and one landscape session at 4K only when the selected camera supports it. Use multiple takes per session. | Record selected and actual codec/resolution, duration, first/last timestamps, and marker offsets at the start, joins, and end. Check errors, thermal warnings, dropped frames or cadence, and growing A/V drift. |
+| A4 | Background and return while starting, recording, paused, in Review, and in Play Skit. Repeat playback → close → resume for 10 cycles; lock/unlock the screen between some cycles. For the stable-pose issue, compare a stationary phone with a gently moved phone returned to the original pose. | After lifecycle events settle, no orphan camera or microphone owner for the validation package. Only confirmed segments appear; duplicate finalisation does not create a second clip. Note separately whether the camera reopens and whether Resume becomes available. |
+| A5 | With two committed clips and a third pending, interrupt only the validation process using the recovery checkpoint test. Relaunch in separate runs for “Later”, continue recording, and exporting confirmed clips. | Confirmed hashes match; pending media is neither registered as confirmed nor overwritten. The next take gets a new file. Deferred work can be reopened; export excludes the unconfirmed take. |
+| A6 | Use simulated reserve/write failures and low-battery readings with test harnesses. Test low storage before start and during a take; inject export cancellation before publication and test retry. On a disposable emulator, separately try actual `ENOSPC` if needed. | Safe refusal or finalisation; prior metadata and originals match. Retry produces one verified export. Battery cases cover unknown, warning and forced-pause thresholds, charging, and resuming after recovery; no duplicate stop. No physical shared-volume fill. |
+| A7 | Observe codec failures using only `adb logcat -d -s SkitCamPlayback:W '*:S'`; repeat cold Play Skit entry and seeks across kept clip boundaries on the G54 and comparison device. | Record whether failures recur and at what phase; log only parsed `playback_failure` JSON. Intentional corrupt-file failures are a separate row, not reproductions of the original vendor decoder error. |
+
+## Requires a person on the device
+
+| ID | Scenario | Inspect and record |
+|---|---|---|
+| H1 | Play, scrub across cuts in both directions, loop/replay, and switch Review segments. Drag, Save and Reset trim in portrait and landscape, at default and large font scale. | No visible blank flash, cropped preview, misleading state, or tap lag. Confirm TalkBack reads counts and pill position/state. |
+| H2 | Run portrait and landscape captures with the built-in microphone, a USB microphone, and a supported wireless microphone. Test disconnect/reconnect during a disposable take and between takes; resume explicitly. | Listen to playback and export. Verify the input using a controlled sound close to it, not just the route label. Note silence, clipping, fallback, drift, and whether the app’s warning and recovery make sense. |
+| H3 | Play the exported 1080p and supported 4K files in the system Gallery and a second player. Listen at start, joins, and end using the clap/beep marker. | No audible drop, obvious delay, drift, or frame/audio mismatch. Record machine timing results beside the listening check; do not infer sync from matching track lengths. |
+| H4 | Walk through a disposable background interruption, reopening a draft, export cancellation/retry, and simulated low-resource messaging. | Recovery options and user messages are clear; pre-existing media and unrelated Gallery entries remain untouched. |
+
+A safety failure (lost or overwritten confirmed media, unrecoverable export, crash loop, or recording starting silently without the expected audio) blocks release review. Preserve the fixture and redacted evidence rather than trying to reproduce it on a real session.
