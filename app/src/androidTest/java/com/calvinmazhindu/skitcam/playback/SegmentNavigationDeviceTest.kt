@@ -55,7 +55,8 @@ class SegmentNavigationDeviceTest {
     private var font: String? = null
 
     @Before fun prepare() {
-        check(context.packageName == "com.calvinmazhindu.skitcam.m142validation")
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.m142validation",
+            "com.calvinmazhindu.skitcam.m15avalidation"))
         rotation = shell("wm user-rotation")
         fixedRotation = shell("wm fixed-to-user-rotation")
         font = shell("settings get system font_scale")
@@ -143,6 +144,19 @@ class SegmentNavigationDeviceTest {
         val oldStrip = Rect.unflattenFromString(baseline[0])!!.apply { inset(-paddingPx, -paddingPx) }
         assertEquals(oldStrip, namedBounds("8 kept, 2 discarded"))
         assertEquals(Rect.unflattenFromString(baseline[1]), namedBounds("Play skit from beginning"))
+        verifyNavigationAndExport(hashes)
+    }
+
+    @Test fun verifyFreshSession() {
+        launch()
+        record(10, 0)
+        keep(3, false)
+        keep(9, false)
+        expectSummary(8, 2, .8f)
+        verifyNavigationAndExport(sourceHashes())
+    }
+
+    private fun verifyNavigationAndExport(hashes: String) {
         capture("after-summary")
         keep(3, true)
         expectSummary(9, 1, .9f)

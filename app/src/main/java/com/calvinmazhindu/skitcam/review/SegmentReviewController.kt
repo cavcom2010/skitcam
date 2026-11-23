@@ -14,6 +14,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import com.calvinmazhindu.skitcam.camera.ViewfinderGeometry
+import com.calvinmazhindu.skitcam.playback.PlaybackDiagnostics
+import com.calvinmazhindu.skitcam.playback.PlaybackScreen
 import com.calvinmazhindu.skitcam.recording.RecordingViewModel
 import com.calvinmazhindu.skitcam.recording.Segment
 import com.calvinmazhindu.skitcam.recording.SegmentEditResult
@@ -61,15 +63,17 @@ class SegmentReviewController(context: Context) {
             error = "Video unavailable. The original file is missing or unreadable."
             return
         }
+        val diagnostics = PlaybackDiagnostics(PlaybackScreen.REVIEW)
         try {
             val current = ExoPlayer.Builder(application).build()
             player = current
             current.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+            current.addListener(diagnostics)
             current.addListener(object : Player.Listener {
                 override fun onPlayerError(exception: PlaybackException) {
-                    android.util.Log.w("SkitCamPlayback", "Segment playback failed", exception)
                     if (player === current) {
+                        diagnostics.report(current, exception)
                         error = "Cannot play this segment. Its file and Keep/Discard status have not been changed."
                         releasePlayer()
                     }
@@ -105,7 +109,8 @@ class SegmentReviewController(context: Context) {
             current.setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             current.playWhenReady = false
             if (!fullSource) current.prepare()
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            diagnostics.report(player, failure)
             error = "Cannot open this segment. The original file has not been changed."
             releasePlayer()
         }

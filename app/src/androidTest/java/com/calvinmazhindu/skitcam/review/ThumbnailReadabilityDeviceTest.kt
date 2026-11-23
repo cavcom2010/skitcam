@@ -26,7 +26,9 @@ class ThumbnailReadabilityDeviceTest {
 
     @Before fun checkFixture() {
         check(context.packageName in setOf("com.calvinmazhindu.skitcam.thumbvalidation",
-            "com.calvinmazhindu.skitcam.reviewcheck")) { "Thumbnail validation package only." }
+            "com.calvinmazhindu.skitcam.reviewcheck", "com.calvinmazhindu.skitcam.m15avalidation")) {
+            "Thumbnail validation package only."
+        }
         check(source.isFile) { "Stage tools/thumbnail_fixtures.sh output in files/thumbnail-inputs first." }
     }
 
