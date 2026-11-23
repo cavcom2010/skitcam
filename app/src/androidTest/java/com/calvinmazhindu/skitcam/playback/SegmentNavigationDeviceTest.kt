@@ -56,7 +56,7 @@ class SegmentNavigationDeviceTest {
 
     @Before fun prepare() {
         check(context.packageName in setOf("com.calvinmazhindu.skitcam.m142validation",
-            "com.calvinmazhindu.skitcam.m15avalidation"))
+            "com.calvinmazhindu.skitcam.m15avalidation", "com.calvinmazhindu.skitcam.m15b2capture"))
         rotation = shell("wm user-rotation")
         fixedRotation = shell("wm fixed-to-user-rotation")
         font = shell("settings get system font_scale")
@@ -154,6 +154,31 @@ class SegmentNavigationDeviceTest {
         keep(9, false)
         expectSummary(8, 2, .8f)
         verifyNavigationAndExport(sourceHashes())
+    }
+
+    @Test fun cameraCanAppendAfterClosingPlayback() {
+        launch()
+        record(2, 0)
+        val before = session
+        val hashes = before.segments.map { sha(File(it.path)) }
+        startPlayback()
+        tap("Close playback")
+        await("playback released, camera can record") {
+            model.cameraReady && main { playback.player == null && activity.cameraModel.streaming }
+        }
+        model.resume(0)
+        await("append records after playback closes") {
+            model.snapshots.value.state == RecordingState.Recording && model.snapshots.value.activeDurationMs >= 1_600
+        }
+        model.pause()
+        await("append committed") { model.snapshots.value.state == RecordingState.Paused && session.segments.size == 3 }
+        val after = session
+        assertEquals(before.id, after.id)
+        assertEquals(before.segments, after.segments.dropLast(1))
+        assertEquals(hashes, after.segments.dropLast(1).map { sha(File(it.path)) })
+        val appended = after.segments.last()
+        assertFalse(before.segments.any { it.path == appended.path })
+        assertEquals(appended.videoRotationDegrees, SessionFileStore(File(context.filesDir, "sessions")).validate(appended.path))
     }
 
     private fun verifyNavigationAndExport(hashes: String) {

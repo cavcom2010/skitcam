@@ -23,7 +23,8 @@ class PlaybackFailureDeviceTest {
     @Test fun corruptFixtureStopsBothPlayersWithoutChangingTheSource() {
         val instrument = InstrumentationRegistry.getInstrumentation()
         val context = instrument.targetContext
-        check(context.packageName == "com.calvinmazhindu.skitcam.m15avalidation")
+        check(context.packageName in setOf(
+            "com.calvinmazhindu.skitcam.m15avalidation", "com.calvinmazhindu.skitcam.m15b2validation"))
         val fixture = File.createTempFile("private-diagnostic-fixture-", ".mp4", context.cacheDir)
         val contents = "Not a playable MP4".encodeToByteArray()
         val clip = Segment(1, fixture.path, 1000, 0, 0, id = "private-diagnostic-segment")
@@ -59,7 +60,8 @@ class PlaybackFailureDeviceTest {
 
     @Test fun unavailableSavedVideoReportsAFailure() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        check(context.packageName == "com.calvinmazhindu.skitcam.m15avalidation")
+        check(context.packageName in setOf(
+            "com.calvinmazhindu.skitcam.m15avalidation", "com.calvinmazhindu.skitcam.m15b2validation"))
         val uri = Uri.parse("content://${context.packageName}.absent/private-diagnostic-gallery-id")
         val intent = Intent(context, FinishedPlaybackActivity::class.java).setData(uri)
         ActivityScenario.launch<FinishedPlaybackActivity>(intent).use { scenario ->
