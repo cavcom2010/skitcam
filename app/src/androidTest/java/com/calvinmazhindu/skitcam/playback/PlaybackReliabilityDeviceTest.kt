@@ -7,8 +7,10 @@ import android.os.SystemClock
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.ExoTimeoutException
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.ui.PlayerView
 import androidx.test.core.app.ActivityScenario
@@ -137,8 +139,7 @@ class PlaybackReliabilityDeviceTest {
             }
         }
         failures += exercise("immediate_startup_seek", iterations) {
-            val trace = openSkit { playback.seekTo(1_200) }
-            awaitFrame("Skit playback", Color.GREEN) { trace.player.isPlaying && trace.frames > 0 }
+            startupSeek(waitForSurface = false)
         }
         failures += exercise("review_switching", iterations) {
             val first = startReview(0)
@@ -187,6 +188,15 @@ class PlaybackReliabilityDeviceTest {
             scenario.moveToState(Lifecycle.State.RESUMED)
             startSkit()
         }
+        assertEquals("See m15b2 attempts for individual failures", 0, failures)
+    }
+
+    @Test fun startupSeekTimingProbe() {
+        val iterations = InstrumentationRegistry.getArguments().getString("m15b2Iterations")?.toInt() ?: 30
+        require(iterations in 1..30)
+        var failures = 0
+        failures += exercise("probe_same_turn", iterations) { startupSeek(waitForSurface = false) }
+        failures += exercise("probe_after_surface", iterations) { startupSeek(waitForSurface = true) }
         assertEquals("See m15b2 attempts for individual failures", 0, failures)
     }
 
@@ -243,15 +253,24 @@ class PlaybackReliabilityDeviceTest {
             transitionSamples = 0
             failureCode = null
             var failure: String? = null
+            var failureState: JSONObject? = null
             try { action() }
-            catch (error: AssertionError) { failure = phase }
+            catch (error: AssertionError) {
+                failure = phase
+                failureState = main { traces.lastOrNull()?.failureState() }
+            }
             finally {
                 resetPlayers()
+                val players = main {
+                    if (failure == null && traces.any { it.errorCode != null }) failure = "cleanup"
+                    traces.map { it.toJson() }
+                }
                 val row = JSONObject().put("run", runId).put("scenario", label)
                     .put("attempt", index + 1).put("passed", failure == null)
                     .put("failure_step", failure).put("media3_error_code", failureCode)
+                    .put("before_cleanup", failureState)
                     .put("black_samples", blackSamples).put("transition_samples", transitionSamples)
-                    .put("players", JSONArray(traces.map { it.toJson() }))
+                    .put("players", JSONArray(players))
                 File(data, "attempts.jsonl").appendText("$row\n")
             }
             if (failure != null) failures++
@@ -266,11 +285,26 @@ class PlaybackReliabilityDeviceTest {
         }
     }
 
-    private fun openSkit(before: () -> Unit = {}, after: () -> Unit = {}): Trace = main {
+    private fun startupSeek(waitForSurface: Boolean) {
+        fun seek(trace: Trace) {
+            trace.markSeek()
+            playback.seekTo(1_200)
+        }
+        val trace = openSkit { if (!waitForSurface) seek(it) }
+        if (waitForSurface) {
+            await("surface_before_seek") { main { trace.surfaceObserved } }
+            main { seek(trace) }
+        }
+        awaitFrame("Skit playback", Color.GREEN) {
+            trace.player.isPlaying && trace.frames > 0 && playback.currentIndex == 0
+        }
+    }
+
+    private fun openSkit(before: () -> Unit = {}, after: (Trace) -> Unit = {}): Trace = main {
         before()
         val started = SystemClock.elapsedRealtime()
         assertTrue(playback.play(fixture).ready)
-        trace("skit", playback.player, started).also { after() }
+        trace("skit", playback.player, started).also(after)
     }
 
     private fun startReview(index: Int, colour: Int = listOf(Color.RED, Color.BLUE, Color.CYAN)[index]): Trace {
@@ -382,9 +416,11 @@ class PlaybackReliabilityDeviceTest {
         private val initialState = player.playbackState
         private var bufferingMs = if (initialState == Player.STATE_BUFFERING) elapsed() else null
         private var surfaceMs: Long? = null
+        val surfaceObserved get() = surfaceMs != null
         private var decoderMs: Long? = null
         private var decoderName: String? = null
         private var firstFrameMs: Long? = null
+        private var seekMs: Long? = null
         private var closeStartedMs: Long? = null
         private var closeReturnedMs: Long? = null
         private var decoderReleasedMs: Long? = null
@@ -392,6 +428,8 @@ class PlaybackReliabilityDeviceTest {
             private set
         var errorCode: Int? = null
             private set
+        private var errorMs: Long? = null
+        private var timeoutOperation: Int? = null
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_BUFFERING && bufferingMs == null) bufferingMs = elapsed()
         }
@@ -411,16 +449,26 @@ class PlaybackReliabilityDeviceTest {
             frames++
             if (firstFrameMs == null) firstFrameMs = elapsed()
         }
-        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            errorCode = error.errorCode
+        override fun onPlayerError(error: PlaybackException) {
+            if (errorCode == null) {
+                errorCode = error.errorCode
+                errorMs = elapsed()
+                timeoutOperation = (error.cause as? ExoTimeoutException)?.timeoutOperation
+            }
         }
+        fun markSeek() { seekMs = elapsed() }
         fun closeStarted() { closeStartedMs = elapsed() }
         fun closeReturned() { closeReturnedMs = elapsed() }
         private fun elapsed() = SystemClock.elapsedRealtime() - started
+        fun failureState() = JSONObject().put("player_state", player.playbackState)
+            .put("position_ms", player.currentPosition).put("surface_observed", surfaceObserved)
+            .put("first_frame_observed", frames > 0)
+
         fun toJson() = JSONObject().put("screen", screen).put("initial_state", initialState)
             .put("buffering_ms", bufferingMs)
             .put("surface_ms", surfaceMs).put("decoder_ms", decoderMs).put("decoder", decoderName)
-            .put("first_frame_ms", firstFrameMs).put("error_code", errorCode)
+            .put("first_frame_ms", firstFrameMs).put("seek_ms", seekMs)
+            .put("error_code", errorCode).put("error_ms", errorMs).put("timeout_operation", timeoutOperation)
             .put("close_started_ms", closeStartedMs).put("close_returned_ms", closeReturnedMs)
             .put("decoder_released_ms", decoderReleasedMs)
     }
