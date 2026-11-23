@@ -26,9 +26,9 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Install Android SDK packages
-        run: |
-          sdkmanager --sdk_root="$ANDROID_HOME" --licenses < <(yes)
-          sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-36" "build-tools;35.0.0"
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;35.0.0'
       - name: Run JVM tests, lint, and compile both debug APKs
         run: |
           ./gradlew --no-daemon --console=plain --continue \
