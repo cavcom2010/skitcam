@@ -39,6 +39,7 @@ class RecordingViewModel(application: Application) : AndroidViewModel(applicatio
     internal val battery get() = runtime.battery.asStateFlow()
     internal val batteryPolicy get() = runtime.batteryPolicy
     internal fun updateBattery(reading: BatteryReading) = runtime.updateBattery(reading)
+    internal fun pinValidationBattery(reading: BatteryReading?) = runtime.pinValidationBattery(reading)
     var boundLens: CameraLens
         get() = runtime.boundLens
         set(value) { runtime.boundLens = value }
@@ -78,6 +79,8 @@ private class RecordingRuntime(private val application: Application) {
     val pendingCleanup = MutableStateFlow(emptyList<String>())
     val batteryPolicy = RecordingBatteryPolicy()
     val battery = MutableStateFlow(BatteryReading())
+    private var liveBattery = BatteryReading()
+    private var validationBattery: BatteryReading? = null
     @Volatile var boundLens = CameraLens.Rear
     val snapshots = state.asStateFlow()
     val audio = com.calvinmazhindu.skitcam.audio.AudioMonitor(application, ::audioChanged)
@@ -120,6 +123,20 @@ private class RecordingRuntime(private val application: Application) {
             }
         })
     fun updateBattery(reading: BatteryReading) {
+        liveBattery = reading
+        if (validationBattery == null) applyBattery(reading)
+    }
+
+    /** Main-thread instrumentation only; never changes the OS battery state. */
+    fun pinValidationBattery(reading: BatteryReading?) {
+        check(com.calvinmazhindu.skitcam.BuildConfig.DEBUG &&
+            application.packageName == "com.calvinmazhindu.skitcam.m15b1m15b31battery" &&
+            Looper.myLooper() == Looper.getMainLooper())
+        validationBattery = reading
+        applyBattery(reading ?: liveBattery)
+    }
+
+    private fun applyBattery(reading: BatteryReading) {
         if (battery.value == reading) return
         battery.value = reading
         if (batteryPolicy.shouldPause(reading)) worker.execute { engine.pauseForBattery() }

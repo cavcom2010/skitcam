@@ -26,7 +26,18 @@ class AudioDeviceTest {
     @Test fun builtinDiscoveryLevelPauseResumeAndExport() {
         val pkg=instrumentation.targetContext.packageName
         for(p in listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO,Manifest.permission.POST_NOTIFICATIONS)) shell("pm grant $pkg $p")
+        val traceRotation=InstrumentationRegistry.getArguments().getString("m15b31RotationProbe")=="true"
+        fun rotationProbe(stage: String) {
+            if(!traceRotation) return
+            val policy=shell("wm user-rotation")
+            val user=shell("settings get system user_rotation")
+            val auto=shell("settings get system accelerometer_rotation")
+            instrumentation.sendStatus(2,android.os.Bundle().apply {
+                putString("rotationProbe","$stage wm=$policy user=$user auto=$auto")
+            })
+        }
         val rotation=shell("wm user-rotation")
+        rotationProbe("beforeLaunch")
         val scenario=ActivityScenario.launch(MainActivity::class.java)
         lateinit var model: RecordingViewModel
         lateinit var activity: MainActivity
@@ -54,17 +65,22 @@ class AudioDeviceTest {
             await("samples") { model.snapshots.value.activeDurationMs>=1500 };model.pause()
             await("paused") { model.snapshots.value.state==RecordingState.Paused }
             await("meter released") { model.audio.state.value.health==CaptureHealth.Idle && model.audio.state.value.peak==null }
+            rotationProbe("firstPause")
             scenario.recreate();scenario.onActivity { activity=it;model=it.recordingModel }
             await("camera after recreation") { model.cameraReady && activity.orientation.pose==0 }
+            rotationProbe("recreated")
             model.resume(0);await("resumed") { model.snapshots.value.state==RecordingState.Recording }
             await("resumed audio") { model.audio.state.value.health==CaptureHealth.Active && model.snapshots.value.activeDurationMs>=1500 }
             model.stop();await("recording complete") { model.snapshots.value.state==RecordingState.Completed }
             await("export settled") { ExportJournal.status.value?.let { it.sessionId==owned && !it.active }==true }
             assertEquals(ExportState.Completed,ExportJournal.status.value!!.state)
             assertEquals(2,model.snapshots.value.count)
+            rotationProbe("exported")
         } finally {
             if(owned!=null && model.snapshots.value.session?.id==owned && model.snapshots.value.state in setOf(RecordingState.Recording,RecordingState.Paused)) model.stop()
-            ExportTestSupport.settle();scenario.close();assertEquals("Audio test must not change global rotation",rotation,shell("wm user-rotation"))
+            ExportTestSupport.settle();scenario.close()
+            rotationProbe("activityClosed")
+            assertEquals("Audio test must not change global rotation",rotation,shell("wm user-rotation"))
         }
     }
 }

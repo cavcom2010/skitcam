@@ -206,6 +206,7 @@ class RecordingResumeDeviceTest {
     }
 
     @Test fun pausedAndReviewSurviveRepeatedReturnsWithoutBypassingBattery() {
+        check(context.packageName == "com.calvinmazhindu.skitcam.m15b1m15b31battery")
         begin()
         model.pause()
         val before = paused(1)
@@ -224,33 +225,27 @@ class RecordingResumeDeviceTest {
         }
         await("Resume available before battery injection") { resumeButton()?.isEnabled == true }
         val critical = BatteryReading(5.0)
-        activity {
-            model.updateBattery(critical)
-            assertEquals(critical, model.battery.value)
-        }
-        var sawReplacement = false
-        var sawMissingButton = false
-        var sawEnabledDuringInjection = false
+        val live = model.battery.value
         try {
-            await("Resume disabled while the injected battery reading is active") {
-                val active = model.battery.value == critical
-                val enabled = resumeButton()?.isEnabled
-                sawReplacement = sawReplacement || !active
-                sawMissingButton = sawMissingButton || enabled == null
-                sawEnabledDuringInjection = sawEnabledDuringInjection || (active && enabled == true)
-                active && enabled == false
+            activity {
+                model.pinValidationBattery(critical)
+                // Exercise the same entry point as a live USB-charging update, without
+                // changing battery settings or depending on the next real broadcast.
+                model.updateBattery(live)
+                assertEquals(critical, model.battery.value)
             }
+            await("Resume disabled while the injected battery reading is active") {
+                model.battery.value == critical && resumeButton()?.isEnabled == false
+            }
+            model.resume(expectedPose)
+            await("runtime rejected low-battery Resume") { snapshot.message?.contains("battery") == true }
+            verifyUnchanged(before, hashes)
+            activity { model.pinValidationBattery(BatteryReading(80.0)) }
+            resumeExplicitly()
+            verifyAppended(before, hashes)
         } finally {
-            phase("battery probe: replaced=$sawReplacement missingResume=$sawMissingButton " +
-                "enabledDuringInjection=$sawEnabledDuringInjection finalReading=${model.battery.value} " +
-                "finalResumeEnabled=${resumeButton()?.isEnabled}")
+            activity { model.pinValidationBattery(null) }
         }
-        model.resume(expectedPose)
-        await("runtime rejected low-battery Resume") { snapshot.message?.contains("battery") == true }
-        verifyUnchanged(before, hashes)
-        activity { model.updateBattery(BatteryReading(80.0)) }
-        resumeExplicitly()
-        verifyAppended(before, hashes)
     }
 
     @Test fun rotatedInBackgroundBlocksResumeUntilOriginalPoseReturns() {
