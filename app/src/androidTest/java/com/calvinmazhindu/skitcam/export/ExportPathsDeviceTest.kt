@@ -1,6 +1,11 @@
 package com.calvinmazhindu.skitcam.export
 
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -15,6 +20,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 /** Synthetic/new sessions only. Historical inputs and production media remain read-only. */
@@ -158,6 +166,61 @@ class ExportPathsDeviceTest {
             assertEquals(1,it.count)
         }
     }
+
+    private fun fieldFixtureInputs() = listOf(File(inputs,"zero/segment_001.mp4"), File(inputs,"zero/segment_002.mp4"))
+
+    @Test fun fieldFixturesPublishOrdinaryAndTrimmedReorderedResults() {
+        requireFieldValidation()
+        val ordinary=fixture(fieldFixtureInputs())
+        val trimmed=fixture(fieldFixtureInputs()+fieldFixtureInputs().first(),true,listOf(1,0))
+        for ((name,f) in listOf("ordinary" to ordinary,"trimmed" to trimmed)) {
+            request(f)
+            val published=run(f)
+            assertPublication(f,published,name)
+        }
+    }
+
+    @Test fun fieldFixtureCancelledThenLowSpaceThenRetryPublishesExactlyOnce() {
+        requireFieldValidation()
+        val f=fixture(fieldFixtureInputs(),true,listOf(1,0))
+        request(f)
+        val initial=ExportJournal.read(context,f.session.id)!!
+        ExportJournal.cancelRequested=true
+        val cancelled=run(f)
+        assertEquals("Cancelled",cancelled.getString("state"))
+        assertEquals(initial.getString("id"),cancelled.getString("id"))
+        assertTrue(fieldPublicationRows(context,initial).isEmpty())
+        try {
+            ExportProcessor.availableBytesForTests=1
+            val failed=run(f,true)
+            assertEquals("Failed",failed.getString("state"))
+            assertTrue(failed.getString("message").contains("Insufficient space"))
+            assertEquals(initial.getString("id"),failed.getString("id"))
+            assertFalse(File(ExportJournal.directory(context,f.session.id),"output.mp4").exists())
+            assertTrue(fieldPublicationRows(context,initial).isEmpty())
+        } finally { ExportProcessor.availableBytesForTests=null }
+        val completed=run(f,true)
+        assertEquals(initial.getString("id"),completed.getString("id"))
+        assertPublication(f,completed,"retried")
+        ExportService.launch(context,f.session.id,true)
+        await("completed job remains idle") { !ExportJournal.busy }
+        val reopened=checkNotNull(ExportJournal.read(context,f.session.id))
+        assertEquals(completed.getString("uri"),reopened.getString("uri"))
+        assertPublication(f,reopened,null)
+    }
+
+    private fun requireFieldValidation() {
+        // Retain the existing low-space test hook's .m12bvalidation suffix, not its old app ID.
+        check(context.packageName=="com.calvinmazhindu.skitcam.m15b3fixtures.m12bvalidation")
+        check(Build.VERSION.SDK_INT>=30) { "These checks require MediaStore pending-row queries." }
+    }
+
+    @androidx.annotation.RequiresApi(30)
+    private fun assertPublication(f: Fixture,job: JSONObject,copyName: String?) {
+        assertFieldPublication(context,job,copyName)
+        assertEquals(f.hashes,f.session.segments.map { sha(File(it.path)) })
+    }
+
     @Test fun directCopyComparisonOnIdenticalVerifiedFixture() {
         val timings=JSONArray()
         try {
@@ -172,4 +235,64 @@ class ExportPathsDeviceTest {
         } finally { ExportProcessor.forceRenderForTests=false }
         File(context.filesDir,"validation-m12b-checks/direct-copy-comparison.json").writeText(timings.toString(2))
     }
+}
+
+/** Run only after the operator has finished recording and this job has settled. */
+@RunWith(AndroidJUnit4::class)
+class FieldPublicationDeviceTest {
+    @Test fun readBackNamedFieldJob() {
+        val instrument=InstrumentationRegistry.getInstrumentation()
+        val context=instrument.targetContext
+        check(context.packageName=="com.calvinmazhindu.skitcam.m15b3field" && Build.VERSION.SDK_INT>=30)
+        val args=InstrumentationRegistry.getArguments()
+        val session=checkNotNull(args.getString("fieldSession")) { "Provide the disposable session UUID." }
+        check(UUID.fromString(session).toString()==session)
+        val expected=checkNotNull(args.getString("fieldState"))
+        check(expected in setOf("Completed","Cancelled"))
+        val job=checkNotNull(ExportJournal.read(context,session))
+        assertEquals(expected,job.getString("state"))
+        if(expected=="Cancelled") assertTrue(fieldPublicationRows(context,job).isEmpty())
+        else assertFieldPublication(context,job,session)
+    }
+}
+
+@androidx.annotation.RequiresApi(30)
+private fun fieldPublicationRows(context: Context,job: JSONObject): List<Pair<Uri,Boolean>> {
+    val collection=MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+    val id=job.getString("id")
+    val stamp=SimpleDateFormat("yyyyMMdd_HHmmss",Locale.US).apply { timeZone=TimeZone.getTimeZone("UTC") }
+        .format(job.getLong("createdAt"))
+    val args=Bundle().apply {
+        putString(ContentResolver.QUERY_ARG_SQL_SELECTION,
+            "${MediaStore.Video.Media.OWNER_PACKAGE_NAME}=? AND ${MediaStore.Video.Media.RELATIVE_PATH}=? AND "+
+                "(${MediaStore.Video.Media.DESCRIPTION}=? OR ${MediaStore.Video.Media.DISPLAY_NAME}=?)")
+        putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+            arrayOf(context.packageName,"Movies/SkitCam/","SkitCam export job:$id","SkitCam_${stamp}_${id}.mp4"))
+        putInt(MediaStore.QUERY_ARG_MATCH_PENDING,MediaStore.MATCH_INCLUDE)
+    }
+    return checkNotNull(context.contentResolver.query(collection,
+        arrayOf(MediaStore.Video.Media._ID,MediaStore.Video.Media.IS_PENDING),args,null)).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(ContentUris.withAppendedId(collection,cursor.getLong(0)) to (cursor.getInt(1)!=0))
+            }
+        }
+    }
+}
+
+@androidx.annotation.RequiresApi(30)
+private fun assertFieldPublication(context: Context,job: JSONObject,copyName: String?) {
+    assertEquals("Completed",job.getString("state"))
+    val uri=Uri.parse(job.getString("uri"))
+    assertEquals(listOf(uri to false),fieldPublicationRows(context,job))
+    val copy=if(copyName!=null) File(context.filesDir,"m15b3-published/$copyName.mp4") else
+        File.createTempFile("m15b3-readback-",".mp4",context.cacheDir)
+    try {
+        copy.parentFile!!.mkdirs()
+        checkNotNull(context.contentResolver.openInputStream(uri)).use { input ->
+            if(copyName!=null) check(copy.createNewFile()) { "Use a fresh validation run; readback already exists." }
+            copy.outputStream().use { input.copyTo(it) }
+        }
+        assertEquals(job.getString("verifiedSha"),sha(copy))
+    } finally { if(copyName==null) copy.delete() }
 }
