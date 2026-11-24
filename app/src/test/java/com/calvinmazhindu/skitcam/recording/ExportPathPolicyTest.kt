@@ -27,10 +27,14 @@ class ExportPathPolicyTest {
     @Test fun trimmedClipsKeepRenderer() {
         val trimmed=spec().copy(clips=listOf(ExportClip("0","/0.mp4",TrimRange(10000,300,9700))))
         assertEquals(ExportPath.RENDER,ExportPathPolicy.choose(trimmed,listOf(facts)).path)
+        assertEquals(ExportDecision(ExportPath.RENDER, "Saved trim requires the established renderer"),
+            ExportPathPolicy.renderWithoutProbe(trimmed))
+        assertNull(ExportPathPolicy.renderWithoutProbe(spec()))
     }
     @Test fun legacyJobsKeepBitrateGeometryAndCadencePolicy() {
         assertEquals(ExportPath.RENDER,ExportPathPolicy.choose(spec().copy(captureProfile=null),listOf(facts)).path)
         assertEquals(ExportPath.RENDER,ExportPathPolicy.choose(spec().copy(captureProfile=profile.copy(legacy=true)),listOf(facts)).path)
+        assertEquals(ExportPath.RENDER, ExportPathPolicy.renderWithoutProbe(spec().copy(captureProfile=null))?.path)
     }
     @Test fun unknownHdrEncryptedOrNonSquareSourcesRender() {
         for(f in listOf(facts.copy(sdr=false),facts.copy(encrypted=true),facts.copy(squarePixels=false),facts.copy(videoConfig=emptyList())))

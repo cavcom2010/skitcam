@@ -103,7 +103,9 @@ class ExportService : Service() {
             }
             val candidate=File(directory,"output.mp4")
             val verified=job.optString("verifiedSha")
-            if(verified.isBlank() || !candidate.isFile || sha(candidate)!=verified) {
+            val reusable=verified.isNotBlank() && candidate.isFile &&
+                ExportTrace.measure(id,"verifiedCheckpointHash") { sha(candidate)==verified }
+            if(!reusable) {
                 if(verified.isNotBlank()) {
                     job.put("invalidCheckpointSha",verified).remove("verifiedSha")
                     job.remove("verification");ExportJournal.write(this,id,job)
@@ -115,7 +117,9 @@ class ExportService : Service() {
                 val required=outputProfile?.takeUnless { it.legacy }?.let { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.reserveBytes(spec.durationMs,it.width,it.height,it.settings.fps) }
                     ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
                 check(ExportProcessor.freeBytes(this,directory)>required) { "Insufficient space for finishing and gallery copy." }
-                check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
+                ExportTrace.measure(id,"candidateCleanup") {
+                    check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
+                }
                 ExportJournal.update(this,id,ExportState.Exporting)
                 val cameraDeadline=System.nanoTime()+10_000_000_000L
                 val cameraWaitStart=ExportTrace.now()
@@ -126,7 +130,7 @@ class ExportService : Service() {
                 ExportTrace.duration(id,"cameraReleaseWait",cameraWaitStart)
                 val report=ExportProcessor.process(this,id,spec,candidate,required)
                 job=ExportJournal.read(this,id)!!;job.put("verifiedSha",report.getString("sha256")).put("verification",report)
-                ExportJournal.write(this,id,job)
+                ExportTrace.measure(id,"verifiedCheckpointCommit") { ExportJournal.write(this,id,job) }
             }
             checkCancelled()
             ExportJournal.update(this,id,ExportState.Publishing)

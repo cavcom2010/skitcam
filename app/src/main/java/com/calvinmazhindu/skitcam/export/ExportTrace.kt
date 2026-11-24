@@ -13,7 +13,8 @@ internal object ExportTrace {
     private data class Run(val origin: String, val start: Long,
         val events: LinkedHashMap<String, Long> = linkedMapOf(),
         val spans: MutableList<JSONObject> = mutableListOf(),
-        val bytes: MutableMap<String, Long> = linkedMapOf())
+        val bytes: MutableMap<String, Long> = linkedMapOf(),
+        val decoderTotals: MutableMap<String, JSONObject> = linkedMapOf())
     private val process = UUID.randomUUID().toString()
     private val runs = object : LinkedHashMap<String, Run>() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Run>?) = size > 32
@@ -37,6 +38,9 @@ internal object ExportTrace {
     @Synchronized fun bytes(id: String?, kind: String, count: Long) {
         runs[id]?.let { it.bytes[kind] = (it.bytes[kind] ?: 0) + count }
     }
+    @Synchronized fun decoderTotals(id: String?, track: String, totals: JSONObject) {
+        runs[id]?.decoderTotals?.put(track, totals)
+    }
     @Synchronized fun flush(context: Context, id: String) {
         val run = runs[id] ?: return
         // A trace failure must never turn a verified save into a failure.
@@ -46,6 +50,7 @@ internal object ExportTrace {
                 .put("eventsMs", JSONObject().apply {
                     run.events.forEach { (name, time) -> put(name, (time - run.start) / 1_000_000.0) }
                 }).put("spans", JSONArray(run.spans)).put("bytes", JSONObject(run.bytes))
+                .put("decoderTotals", JSONObject(run.decoderTotals))
             val atomic = AtomicFile(File(ExportJournal.directory(context, id), "performance.json"))
             val output = atomic.startWrite()
             try { output.write(json.toString(2).toByteArray()); atomic.finishWrite(output) }

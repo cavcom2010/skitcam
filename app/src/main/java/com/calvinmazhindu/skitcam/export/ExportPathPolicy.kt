@@ -13,11 +13,20 @@ enum class ExportPath { DIRECT_COPY, VIDEO_PASSTHROUGH_AUDIO_RENDER, RENDER }
 data class ExportDecision(val path: ExportPath, val reason: String)
 
 object ExportPathPolicy {
+    /** These jobs cannot take a fast path regardless of the compressed samples. */
+    fun renderWithoutProbe(spec: ExportSpec): ExportDecision? = when {
+        spec.captureProfile == null || spec.captureProfile.legacy ->
+            ExportDecision(ExportPath.RENDER, "Legacy output policy requires rendering")
+        spec.clips.any { it.range.isTrimmed } ->
+            ExportDecision(ExportPath.RENDER, "Saved trim requires the established renderer")
+        else -> null
+    }
+
     fun choose(spec: ExportSpec, facts: List<ExportInputFacts>): ExportDecision {
         fun render(reason: String) = ExportDecision(ExportPath.RENDER, reason)
-        val profile=spec.captureProfile?.takeUnless { it.legacy } ?: return render("Legacy output policy requires rendering")
+        renderWithoutProbe(spec)?.let { return it }
+        val profile=checkNotNull(spec.captureProfile)
         if(facts.size!=spec.clips.size || facts.isEmpty()) return render("Incomplete input facts")
-        if(spec.clips.any { it.range.isTrimmed }) return render("Saved trim requires the established renderer")
         val first=facts.first()
         for((index,f) in facts.withIndex()) {
             if(f.encrypted || f.videoMime!="video/avc" || f.audioMime!="audio/mp4a-latm") return render("Unsupported tracks")

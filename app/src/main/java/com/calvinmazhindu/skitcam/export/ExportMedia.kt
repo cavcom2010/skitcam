@@ -116,12 +116,14 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, traceId
 
 /** Full decode without speaker playback or retaining decoded frames. */
 internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
-    inspect(file)
+    ExportTrace.measure(traceId,"verifyInspectBefore") { inspect(file) }
     val spans=mutableListOf<Pair<Long,Long>>()
     val measured=JSONArray()
     for(type in listOf("video/","audio/")) {
         val decodeStart=ExportTrace.now()
         val extractor=MediaExtractor();var codec: MediaCodec?=null
+        var inputWaitNs=0L;var outputWaitNs=0L;var sampleReadNs=0L
+        var inputMisses=0;var outputMisses=0
         try {
             extractor.setDataSource(file.path)
             val track=(0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith(type) }
@@ -130,6 +132,7 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
             if(type=="audio/") require(format.getInteger(MediaFormat.KEY_SAMPLE_RATE)==48000 && format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)==2) { "Unexpected audio output format." }
             extractor.selectTrack(track)
             codec=MediaCodec.createDecoderByType(mime);codec.configure(format,null,null,0);codec.start()
+            ExportTrace.duration(traceId,"decoderSetup_$type",decodeStart)
             var inputDone=false;var outputDone=false;val order=PresentationOrder();var count=0
             val info=MediaCodec.BufferInfo();var lastWork=System.nanoTime()
             var pcmEnd: Long? = null
@@ -138,14 +141,22 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
             while(!outputDone) {
                 checkCancelled();check(System.nanoTime()-lastWork<TimeUnit.SECONDS.toNanos(30)) { "Output decoder stalled." }
                 if(!inputDone) {
+                    val waitStart=ExportTrace.now()
                     val index=codec.dequeueInputBuffer(1000)
+                    inputWaitNs+=ExportTrace.now()-waitStart
+                    if(index==MediaCodec.INFO_TRY_AGAIN_LATER) inputMisses++
                     if(index>=0) {
+                        val readStart=ExportTrace.now()
                         val size=extractor.readSampleData(codec.getInputBuffer(index)!!,0)
+                        sampleReadNs+=ExportTrace.now()-readStart
                         if(size<0) { codec.queueInputBuffer(index,0,0,0,MediaCodec.BUFFER_FLAG_END_OF_STREAM);inputDone=true }
                         else { codec.queueInputBuffer(index,0,size,extractor.sampleTime,0);extractor.advance() }
                     }
                 }
+                val waitStart=ExportTrace.now()
                 val index=codec.dequeueOutputBuffer(info,1000)
+                outputWaitNs+=ExportTrace.now()-waitStart
+                if(index==MediaCodec.INFO_TRY_AGAIN_LATER) outputMisses++
                 if(index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) outputFormat=codec.outputFormat
                 if(index>=0) {
                     lastWork=System.nanoTime()
@@ -174,9 +185,15 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
                 .put("decodedBuffers",trace.buffers).put("decodedPcmFrames",if(type=="audio/") pcmFrames else JSONObject.NULL)
                 .put("decodedPcmEndExclusiveUs",pcmEnd ?: JSONObject.NULL)
                 .put("reportedTrackDurationUs",if(format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else JSONObject.NULL))
-        } finally { codec?.release();extractor.release();ExportTrace.duration(traceId,"decode_$type",decodeStart) }
+        } finally {
+            codec?.release();extractor.release();ExportTrace.duration(traceId,"decode_$type",decodeStart)
+            ExportTrace.decoderTotals(traceId,type,JSONObject()
+                .put("inputWaitMs",inputWaitNs/1_000_000.0).put("outputWaitMs",outputWaitNs/1_000_000.0)
+                .put("sampleReadMs",sampleReadNs/1_000_000.0)
+                .put("inputTryAgain",inputMisses).put("outputTryAgain",outputMisses))
+        }
     }
-    val duration=inspect(file).duration
+    val duration=ExportTrace.measure(traceId,"verifyInspectAfter") { inspect(file).duration }
     val timing=JSONObject().put("expectedMs",expectedMs).put("containerMs",duration).put("tracks",measured)
         .put("lastPtsGapUs",kotlin.math.abs(spans[0].second-spans[1].second))
     diagnostic(timing)

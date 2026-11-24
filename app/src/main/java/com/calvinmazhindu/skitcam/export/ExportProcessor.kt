@@ -19,10 +19,13 @@ internal object ExportProcessor {
         var job=ExportJournal.read(context,id)!!
         val forced=context.packageName.endsWith(".m12bvalidation") && forceRenderForTests
         if(!job.has("selectedPath")) {
-            val decision=if(forced || job.optInt("pathPolicy")==0) ExportDecision(ExportPath.RENDER,"Frozen standard-render policy")
-            else ExportTrace.measure(id,"eligibilityProbe") {
-                try { ExportPathPolicy.choose(spec,spec.clips.map { ExportInputProbe.inspect(File(it.path)) }) }
-                catch(failure: Exception) { checkCancelled();ExportDecision(ExportPath.RENDER,"Probe cannot establish eligibility: ${failure.message}") }
+            val decision=ExportTrace.measure(id,"pathSelection") {
+                checkCancelled()
+                if(forced || job.optInt("pathPolicy")==0) ExportDecision(ExportPath.RENDER,"Frozen standard-render policy")
+                else ExportPathPolicy.renderWithoutProbe(spec) ?: ExportTrace.measure(id,"eligibilityProbe") {
+                    try { ExportPathPolicy.choose(spec,spec.clips.map { ExportInputProbe.inspect(File(it.path)) }) }
+                    catch(failure: Exception) { checkCancelled();ExportDecision(ExportPath.RENDER,"Probe cannot establish eligibility: ${failure.message}") }
+                }
             }
             job.put("selectedPath",decision.path.name).put("pathReason",decision.reason)
             ExportJournal.write(context,id,job)
@@ -44,10 +47,12 @@ internal object ExportProcessor {
                 }
             }
             ExportJournal.update(context,id,ExportState.Verifying)
-            spec.captureProfile?.takeUnless { it.legacy }?.let { profile ->
-                val output=inspect(candidate);val input=inspect(File(spec.clips.first().path))
-                require(maxOf(output.width,output.height)==maxOf(profile.width,profile.height) && minOf(output.width,output.height)==minOf(profile.width,profile.height)) { "Export resolution does not match profile" }
-                require(output.width==input.width && output.height==input.height) { "Export display orientation differs from source" }
+            ExportTrace.measure(id,"verifyGeometry") {
+                spec.captureProfile?.takeUnless { it.legacy }?.let { profile ->
+                    val output=inspect(candidate);val input=inspect(File(spec.clips.first().path))
+                    require(maxOf(output.width,output.height)==maxOf(profile.width,profile.height) && minOf(output.width,output.height)==minOf(profile.width,profile.height)) { "Export resolution does not match profile" }
+                    require(output.width==input.width && output.height==input.height) { "Export display orientation differs from source" }
+                }
             }
             return ExportTrace.measure(id,"verification") {
                 verify(candidate,spec.durationMs,id) { timing ->
