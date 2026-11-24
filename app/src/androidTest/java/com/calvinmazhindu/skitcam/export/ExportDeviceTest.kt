@@ -74,7 +74,13 @@ class ExportDeviceTest {
             ExportService.launch(context,session.id)
             Thread.sleep(500)
             assertEquals(previous,ExportJournal.status.value!!.uri)
-            await("Automatic return to a live camera") { model.cameraReady }
+            await("Automatic return to a live camera") {
+                var returned=false
+                scenario.onActivity {
+                    returned=model.cameraReady && it.cameraModel.streaming && it.cameraModel.latestUri==result.uri
+                }
+                returned
+            }
             scenario.onActivity { assertEquals(result.uri,it.cameraModel.latestUri);assertTrue(it.cameraModel.streaming) }
             clickText("Open saved media gallery")
             var gallery: com.calvinmazhindu.skitcam.gallery.SavedMediaActivity?=null
