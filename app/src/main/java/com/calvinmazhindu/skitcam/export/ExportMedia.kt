@@ -114,9 +114,40 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, traceId
     }
 }
 
+/** The produced media contradicts the frozen export contract; a different production path may fix it. */
+internal class ExportIntegrityException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+/** A platform decoder call failed. This is not evidence that the produced media is invalid. */
+internal class ExportDecoderException(message: String, val codecErrorCode: Int?, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
+/**
+ * Only exceptions raised by MediaCodec calls become [ExportDecoderException]. Our own
+ * integrity checks and cancellation remain distinguishable.
+ */
+/** 0x80000000, the value the vendor decoder reported before releasing itself. */
+private const val DECODER_UNKNOWN_ERROR = Int.MIN_VALUE
+
+private inline fun <T> codecCall(type: String, block: () -> T): T = try {
+    block()
+} catch (failure: ExportDecoderException) {
+    throw failure
+} catch (failure: MediaCodec.CodecException) {
+    throw ExportDecoderException("$type decoder error ${failure.errorCode}: " +
+        (failure.diagnosticInfo?.takeIf { it.isNotBlank() } ?: failure.message ?: "no detail"),
+        failure.errorCode, failure)
+} catch (failure: IllegalStateException) {
+    throw ExportDecoderException("$type decoder state error: ${failure.message}", null, failure)
+}
+
 /** Full decode without speaker playback or retaining decoded frames. */
 internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
-    ExportTrace.measure(traceId,"verifyInspectBefore") { inspect(file) }
+    ExportTrace.measure(traceId,"verifyInspectBefore") {
+        try { inspect(file) } catch (failure: Exception) {
+            throw ExportIntegrityException("Candidate metadata is unreadable: ${failure.message}", failure)
+        }
+    }
+    val fault=ExportFaults.current()
     val spans=mutableListOf<Pair<Long,Long>>()
     val measured=JSONArray()
     for(type in listOf("video/","audio/")) {
@@ -128,42 +159,58 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
             extractor.setDataSource(file.path)
             val track=(0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith(type) }
             val format=extractor.getTrackFormat(track);val mime=format.getString(MediaFormat.KEY_MIME)!!
-            require(mime==if(type=="video/") "video/avc" else "audio/mp4a-latm") { "Unexpected output codec $mime" }
-            if(type=="audio/") require(format.getInteger(MediaFormat.KEY_SAMPLE_RATE)==48000 && format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)==2) { "Unexpected audio output format." }
+            if(mime!=if(type=="video/") "video/avc" else "audio/mp4a-latm")
+                throw ExportIntegrityException("Unexpected output codec $mime")
+            if(type=="audio/" && (format.getInteger(MediaFormat.KEY_SAMPLE_RATE)!=48000 ||
+                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)!=2))
+                throw ExportIntegrityException("Unexpected audio output format.")
             extractor.selectTrack(track)
-            codec=MediaCodec.createDecoderByType(mime);codec.configure(format,null,null,0);codec.start()
+            if(type=="video/" && fault==ExportFaults.Mode.VIDEO_INIT)
+                throw ExportDecoderException("Injected video decoder initialisation failure",
+                    DECODER_UNKNOWN_ERROR)
+            codecCall(type) {
+                codec=MediaCodec.createDecoderByType(mime);codec!!.configure(format,null,null,0);codec!!.start()
+            }
             ExportTrace.duration(traceId,"decoderSetup_$type",decodeStart)
             var inputDone=false;var outputDone=false;val order=PresentationOrder();var count=0
             val info=MediaCodec.BufferInfo();var lastWork=System.nanoTime()
             var pcmEnd: Long? = null
             var pcmFrames = 0L
             var outputFormat: MediaFormat? = null
+            var injectedRelease=false
             while(!outputDone) {
                 checkCancelled();check(System.nanoTime()-lastWork<TimeUnit.SECONDS.toNanos(30)) { "Output decoder stalled." }
                 if(!inputDone) {
                     val waitStart=ExportTrace.now()
-                    val index=codec.dequeueInputBuffer(1000)
+                    val index=codecCall(type) { codec!!.dequeueInputBuffer(1000) }
                     inputWaitNs+=ExportTrace.now()-waitStart
                     if(index==MediaCodec.INFO_TRY_AGAIN_LATER) inputMisses++
                     if(index>=0) {
                         val readStart=ExportTrace.now()
-                        val size=extractor.readSampleData(codec.getInputBuffer(index)!!,0)
+                        val size=extractor.readSampleData(codecCall(type) { codec!!.getInputBuffer(index)!! },0)
                         sampleReadNs+=ExportTrace.now()-readStart
-                        if(size<0) { codec.queueInputBuffer(index,0,0,0,MediaCodec.BUFFER_FLAG_END_OF_STREAM);inputDone=true }
-                        else { codec.queueInputBuffer(index,0,size,extractor.sampleTime,0);extractor.advance() }
+                        if(size<0) codecCall(type) { codec!!.queueInputBuffer(index,0,0,0,MediaCodec.BUFFER_FLAG_END_OF_STREAM);inputDone=true }
+                        else {
+                            val time=extractor.sampleTime
+                            codecCall(type) { codec!!.queueInputBuffer(index,0,size,time,0) }
+                            extractor.advance()
+                        }
                     }
                 }
                 val waitStart=ExportTrace.now()
-                val index=codec.dequeueOutputBuffer(info,1000)
+                val index=codecCall(type) { codec!!.dequeueOutputBuffer(info,1000) }
                 outputWaitNs+=ExportTrace.now()-waitStart
                 if(index==MediaCodec.INFO_TRY_AGAIN_LATER) outputMisses++
-                if(index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) outputFormat=codec.outputFormat
+                if(index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) outputFormat=codecCall(type) { codec!!.outputFormat }
                 if(index>=0) {
                     lastWork=System.nanoTime()
                     if(info.size>0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG==0) {
-                        order.accept(info.presentationTimeUs);count++
+                        try { order.accept(info.presentationTimeUs) } catch (failure: IllegalArgumentException) {
+                            throw ExportIntegrityException(failure.message ?: "Decoded timestamps moved backwards.", failure)
+                        }
+                        count++
                         if(type=="audio/") {
-                            val decoded=outputFormat ?: codec.outputFormat
+                            val decoded=codecCall(type) { outputFormat ?: codec!!.outputFormat }
                             // Per MediaCodec documentation, raw decoder PCM defaults to signed 16-bit.
                             val encoding=if(decoded.containsKey(MediaFormat.KEY_PCM_ENCODING)) decoded.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
                             val bytes=when(encoding) { AudioFormat.ENCODING_PCM_16BIT -> 2; AudioFormat.ENCODING_PCM_FLOAT -> 4; else -> null }
@@ -173,12 +220,25 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
                                 pcmEnd=TimingMeasurement.endUs(info.presentationTimeUs,frames,decoded.getInteger(MediaFormat.KEY_SAMPLE_RATE))
                             }
                         }
+                        if(count==ExportFaults.FAILURE_OUTPUT && !injectedRelease) when {
+                            type=="video/" && (fault==ExportFaults.Mode.VIDEO_MID || fault==ExportFaults.Mode.PERSISTENT_VIDEO_MID) ->
+                                throw ExportDecoderException("Injected video decoder failure after $count samples",
+                                    DECODER_UNKNOWN_ERROR)
+                            type=="audio/" && fault==ExportFaults.Mode.AUDIO_MID ->
+                                throw ExportDecoderException("Injected audio decoder failure after $count samples",
+                                    DECODER_UNKNOWN_ERROR)
+                            type=="video/" && fault==ExportFaults.Mode.VIDEO_RELEASE -> {
+                                // Reproduce the vendor decoder releasing itself mid-stream.
+                                injectedRelease=true;codecCall(type) { codec!!.release() }
+                            }
+                        }
                     }
                     outputDone=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0
-                    codec.releaseOutputBuffer(index,false)
+                    if(!injectedRelease) codecCall(type) { codec!!.releaseOutputBuffer(index,false) }
                 }
             }
-            require(count>0 && order.first!=null && order.last!=null) { "Output $type contains no decoded samples." }
+            if(count==0 || order.first==null || order.last==null)
+                throw ExportIntegrityException("Output $type contains no decoded samples.")
             spans+=order.first!! to order.last!!
             val trace=DecodedTiming(order.first!!,order.last!!,count.toLong(),pcmEnd)
             measured.put(JSONObject().put("track",type).put("firstPtsUs",trace.firstPtsUs).put("lastPtsUs",trace.lastPtsUs)
@@ -186,19 +246,29 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
                 .put("decodedPcmEndExclusiveUs",pcmEnd ?: JSONObject.NULL)
                 .put("reportedTrackDurationUs",if(format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else JSONObject.NULL))
         } finally {
-            codec?.release();extractor.release();ExportTrace.duration(traceId,"decode_$type",decodeStart)
+            // A released or failed codec must never prevent the extractor from being freed,
+            // and must not replace the original verification failure.
+            runCatching { codec?.release() }
+            runCatching { extractor.release() }
+            ExportTrace.duration(traceId,"decode_$type",decodeStart)
             ExportTrace.decoderTotals(traceId,type,JSONObject()
                 .put("inputWaitMs",inputWaitNs/1_000_000.0).put("outputWaitMs",outputWaitNs/1_000_000.0)
                 .put("sampleReadMs",sampleReadNs/1_000_000.0)
                 .put("inputTryAgain",inputMisses).put("outputTryAgain",outputMisses))
         }
     }
-    val duration=ExportTrace.measure(traceId,"verifyInspectAfter") { inspect(file).duration }
+    val duration=ExportTrace.measure(traceId,"verifyInspectAfter") {
+        try { inspect(file).duration } catch (failure: Exception) {
+            throw ExportIntegrityException("Candidate metadata is unreadable after decoding: ${failure.message}", failure)
+        }
+    }
     val timing=JSONObject().put("expectedMs",expectedMs).put("containerMs",duration).put("tracks",measured)
         .put("lastPtsGapUs",kotlin.math.abs(spans[0].second-spans[1].second))
     diagnostic(timing)
-    require(kotlin.math.abs(duration-expectedMs)<=100) { "Output duration differs: expected $expectedMs ms, got $duration ms." }
-    require(kotlin.math.abs(spans[0].second-spans[1].second)<=100_000 && kotlin.math.abs(spans[0].first-spans[1].first)<=100_000) { "Output audio/video timing differs by over 100 ms." }
+    if(kotlin.math.abs(duration-expectedMs)>100)
+        throw ExportIntegrityException("Output duration differs: expected $expectedMs ms, got $duration ms.")
+    if(kotlin.math.abs(spans[0].second-spans[1].second)>100_000 || kotlin.math.abs(spans[0].first-spans[1].first)>100_000)
+        throw ExportIntegrityException("Output audio/video timing differs by over 100 ms.")
     val digest=ExportTrace.measure(traceId,"outputHash") { sha(file) }
     ExportTrace.bytes(traceId,"outputHashRead",file.length())
     return JSONObject().put("sha256",digest).put("durationMs",duration).put("timing",timing)

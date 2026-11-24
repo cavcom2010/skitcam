@@ -97,6 +97,8 @@ object ExportJournal {
         check(job.optString("verifiedSha").isBlank()) { "A verified checkpoint cannot be replaced" }
         job.put("renderFallbackUsed",true).put("fallbackReason",reason).put("selectedPath",ExportPath.RENDER.name)
             .put("state",ExportState.Exporting.name).put("message","Retrying with the standard renderer")
+        job.remove("candidate")
+        job.remove("candidateReverified")
         write(context,id,job)
     }
     fun restore(context: Context, session: Session) {

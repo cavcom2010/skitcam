@@ -23,7 +23,8 @@ class ExportService : Service() {
                 if (retry) ExportJournal.cancelRequested = false
                 ExportJournal.busy = true
                 try {
-                    context.startForegroundService(Intent(context,ExportService::class.java).putExtra("session",id))
+                    context.startForegroundService(Intent(context,ExportService::class.java).putExtra("session",id)
+                        .putExtra("retry",retry))
                 } catch (e: Exception) {
                     ExportJournal.busy = false
                     throw e
@@ -38,6 +39,7 @@ class ExportService : Service() {
         val id=intent?.getStringExtra("session") ?: return START_NOT_STICKY
         if(intent.action=="cancel") { if(sessionId==id) ExportJournal.cancelRequested=true;return START_NOT_STICKY }
         if(!running.compareAndSet(false,true)) return START_NOT_STICKY
+        val retry=intent.getBooleanExtra("retry",false)
         sessionId=id;ExportJournal.busy=true
         ExportTrace.begin(id,"service")
         ExportTrace.mark(id,"serviceStart")
@@ -49,10 +51,10 @@ class ExportService : Service() {
             .setContentIntent(open).setOngoing(true).build()
         if(Build.VERSION.SDK_INT>=29) startForeground(6,notification,if(Build.VERSION.SDK_INT>=35) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         else startForeground(6,notification)
-        executor.execute { execute(id) }
+        executor.execute { execute(id,retry) }
         return START_NOT_STICKY
     }
-    private fun execute(id: String) {
+    private fun execute(id: String,retry: Boolean) {
         var wakeLock: PowerManager.WakeLock?=null
         try {
             wakeLock=getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"SkitCam:export").apply { acquire(5*60*60*1000L) }
@@ -106,31 +108,34 @@ class ExportService : Service() {
             val reusable=verified.isNotBlank() && candidate.isFile &&
                 ExportTrace.measure(id,"verifiedCheckpointHash") { sha(candidate)==verified }
             if(!reusable) {
-                if(verified.isNotBlank()) {
-                    job.put("invalidCheckpointSha",verified).remove("verifiedSha")
-                    job.remove("verification");ExportJournal.write(this,id,job)
+                // Only an explicit Retry may re-check the completed, unverified bytes from
+                // the previous attempt. Nothing here can publish without the full verifier.
+                val reused=retry && reuseCompletedCandidate(id,spec,outputProfile,candidate)
+                if(!reused) {
+                    // The reuse probe may have recorded its rejection on the journal.
+                    job=ExportJournal.read(this,id)!!
+                    if(verified.isNotBlank()) {
+                        job.put("invalidCheckpointSha",verified).remove("verifiedSha")
+                        job.remove("verification");ExportJournal.write(this,id,job)
+                    }
+                    ExportCandidate.clear(this,id,job)
+                    ExportTrace.measure(id,"sourceHashRecheck") { spec.clips.forEachIndexed { index, clip ->
+                        check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source segment changed. Export not started." }
+                        ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length())
+                    } }
+                    val required=requiredBytes(spec,outputProfile)
+                    check(ExportProcessor.freeBytes(this,directory)>required) { "Insufficient space for finishing and gallery copy." }
+                    ExportTrace.measure(id,"candidateCleanup") {
+                        check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
+                    }
+                    ExportJournal.update(this,id,ExportState.Exporting)
+                    awaitCameraRelease(id)
+                    val report=ExportProcessor.process(this,id,spec,candidate,required)
+                    job=ExportJournal.read(this,id)!!;job.put("verifiedSha",report.getString("sha256")).put("verification",report)
+                    job.remove("candidate")
+                    job.remove("candidateReverified")
+                    ExportTrace.measure(id,"verifiedCheckpointCommit") { ExportJournal.write(this,id,job) }
                 }
-                ExportTrace.measure(id,"sourceHashRecheck") { spec.clips.forEachIndexed { index, clip ->
-                    check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source segment changed. Export not started." }
-                    ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length())
-                } }
-                val required=outputProfile?.takeUnless { it.legacy }?.let { com.calvinmazhindu.skitcam.video.VideoProfilePolicy.reserveBytes(spec.durationMs,it.width,it.height,it.settings.fps) }
-                    ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
-                check(ExportProcessor.freeBytes(this,directory)>required) { "Insufficient space for finishing and gallery copy." }
-                ExportTrace.measure(id,"candidateCleanup") {
-                    check(!candidate.exists() || candidate.delete()) { "Cannot clear this job's incomplete output." }
-                }
-                ExportJournal.update(this,id,ExportState.Exporting)
-                val cameraDeadline=System.nanoTime()+10_000_000_000L
-                val cameraWaitStart=ExportTrace.now()
-                while(!RecordingViewModel.cameraReleasedForExport()) {
-                    check(System.nanoTime()<cameraDeadline) { "Camera is still in use. Retry when recording has closed." }
-                    checkCancelled();Thread.sleep(50)
-                }
-                ExportTrace.duration(id,"cameraReleaseWait",cameraWaitStart)
-                val report=ExportProcessor.process(this,id,spec,candidate,required)
-                job=ExportJournal.read(this,id)!!;job.put("verifiedSha",report.getString("sha256")).put("verification",report)
-                ExportTrace.measure(id,"verifiedCheckpointCommit") { ExportJournal.write(this,id,job) }
             }
             checkCancelled()
             ExportJournal.update(this,id,ExportState.Publishing)
@@ -139,8 +144,16 @@ class ExportService : Service() {
             ExportTrace.mark(id,"published")
         } catch(e: Exception) {
             android.util.Log.e("SkitCamExport","Export failed",e)
-            try { ExportJournal.update(this,id,if(ExportJournal.cancelRequested) ExportState.Cancelled else ExportState.Failed,
-                e.message ?: "Finishing failed. Recording files are preserved.") } catch(_: Exception) { }
+            try {
+                val failureJob=runCatching { ExportJournal.read(this,id) }.getOrNull()
+                val interruptedCheck=failureJob?.optString("lastVerifyFailure")==ExportCandidate.FAILURE_DECODER
+                val message=when {
+                    ExportJournal.cancelRequested -> e.message ?: "Finishing cancelled."
+                    interruptedCheck -> "Checking the finished video was interrupted. Retry re-checks it without re-encoding. Original clips are preserved."
+                    else -> e.message ?: "Finishing failed. Recording files are preserved."
+                }
+                ExportJournal.update(this,id,if(ExportJournal.cancelRequested) ExportState.Cancelled else ExportState.Failed,message)
+            } catch(_: Exception) { }
         } finally {
             if(wakeLock?.isHeld==true) wakeLock.release()
             ExportTrace.mark(id,"serviceIdle")
@@ -149,6 +162,87 @@ class ExportService : Service() {
             running.set(false);ExportJournal.busy=false
         }
     }
+    /**
+     * Re-check the bytes produced by the previous attempt when the user explicitly retries
+     * after a decoder failure. The allowance is journaled before any decoder is opened, so a
+     * crash cannot reset it. On any doubt the caller falls back to the normal rebuild path.
+     */
+    private fun reuseCompletedCandidate(id: String, spec: ExportSpec,
+        outputProfile: com.calvinmazhindu.skitcam.video.CaptureProfile?, candidate: File): Boolean {
+        val directory=ExportJournal.directory(this,id)
+        var job=ExportJournal.read(this,id) ?: return false
+        val assessment=ExportTrace.measure(id,"candidateReuseProbe") {
+            ExportCandidate.assess(this,id,spec,job,candidate,retry=true)
+        }
+        if(assessment is ExportCandidate.Reuse.Rejected) {
+            job.put("candidateReuseRejected",assessment.reason);ExportJournal.write(this,id,job)
+            return false
+        }
+        val checkpoint=(assessment as ExportCandidate.Reuse.Ready).checkpoint
+        val sourcesMatch=runCatching {
+            ExportTrace.measure(id,"sourceHashRecheck") { spec.clips.forEachIndexed { index, clip ->
+                check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) {
+                    "Source segment changed. Export not started."
+                }
+                ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length())
+            } }
+        }.onFailure { failure -> runCatching {
+            val rejected=ExportJournal.read(this,id)!!
+            rejected.put("candidateReuseRejected","Source check failed: ${failure.message}")
+            ExportJournal.write(this,id,rejected)
+        } }.isSuccess
+        if(!sourcesMatch) return false
+        check(ExportProcessor.freeBytes(this,directory)>requiredBytes(spec,outputProfile)) {
+            "Insufficient space for finishing and gallery copy."
+        }
+        val bytesMatch=ExportTrace.measure(id,"candidateCheckpointHash") {
+            candidate.length()==checkpoint.bytes && sha(candidate)==checkpoint.sha256
+        }
+        if(!bytesMatch) {
+            job=ExportJournal.read(this,id)!!
+            job.put("candidateReuseRejected","Candidate bytes changed after rendering")
+            ExportJournal.write(this,id,job)
+            return false
+        }
+        awaitCameraRelease(id)
+        job=ExportJournal.read(this,id)!!
+        // Durable before the decoder is opened: a later crash or failure cannot grant a
+        // second free re-check of the same bytes.
+        job.put("candidateReverified",true)
+            .put("verificationAttempts",job.optInt("verificationAttempts",0)+1)
+            .remove("candidateReuseRejected")
+        ExportJournal.write(this,id,job)
+        ExportTrace.mark(id,"candidateReverifyCommitted")
+        ExportJournal.update(this,id,ExportState.Verifying)
+        val report=ExportProcessor.reverify(this,id,spec,candidate)
+        check(report.getString("sha256")==checkpoint.sha256) {
+            "Re-verified bytes no longer match the completed candidate."
+        }
+        val committed=ExportJournal.read(this,id)!!
+        committed.put("verifiedSha",report.getString("sha256")).put("verification",report)
+        committed.remove("candidate")
+        committed.remove("candidateReverified")
+        committed.remove("lastVerifyFailure")
+        committed.remove("lastVerifyFailureDetail")
+        ExportTrace.measure(id,"verifiedCheckpointCommit") { ExportJournal.write(this,id,committed) }
+        return true
+    }
+
+    private fun awaitCameraRelease(id: String) {
+        val deadline=System.nanoTime()+10_000_000_000L
+        val start=ExportTrace.now()
+        while(!RecordingViewModel.cameraReleasedForExport()) {
+            check(System.nanoTime()<deadline) { "Camera is still in use. Retry when recording has closed." }
+            checkCancelled();Thread.sleep(50)
+        }
+        ExportTrace.duration(id,"cameraReleaseWait",start)
+    }
+
+    private fun requiredBytes(spec: ExportSpec, outputProfile: com.calvinmazhindu.skitcam.video.CaptureProfile?): Long =
+        outputProfile?.takeUnless { it.legacy }?.let {
+            com.calvinmazhindu.skitcam.video.VideoProfilePolicy.reserveBytes(spec.durationMs,it.width,it.height,it.settings.fps)
+        } ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
+
     override fun onTimeout(startId: Int,fgsType: Int) {
         ExportJournal.cancelRequested=true
         sessionId?.let { ExportJournal.update(this,it,ExportState.Failed,"System processing time limit reached. Sources are retained.") }

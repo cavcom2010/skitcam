@@ -37,7 +37,9 @@ data class ExportStatus(val sessionId: String, val state: ExportState, val messa
 }
 
 fun exportTransitionAllowed(from: ExportState,to: ExportState): Boolean = from==to || when(from) {
-    ExportState.Preparing -> to in setOf(ExportState.Exporting,ExportState.Publishing,ExportState.Failed,ExportState.Cancelled,ExportState.Empty)
+    // Verifying is reachable from Preparing only for the explicit, journaled
+    // re-check of a completed but unverified candidate.
+    ExportState.Preparing -> to in setOf(ExportState.Exporting,ExportState.Verifying,ExportState.Publishing,ExportState.Failed,ExportState.Cancelled,ExportState.Empty)
     ExportState.Exporting -> to in setOf(ExportState.Verifying,ExportState.Failed,ExportState.Cancelled)
     ExportState.Verifying -> to in setOf(ExportState.Publishing,ExportState.Failed,ExportState.Cancelled)
     ExportState.Publishing -> to in setOf(ExportState.Completed,ExportState.Failed)

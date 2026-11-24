@@ -32,6 +32,11 @@ internal object ExportProcessor {
         }
         val selected=ExportPath.valueOf(job.getString("selectedPath"))
         fun attempt(path: ExportPath): JSONObject {
+            job=ExportJournal.read(context,id)!!
+            job.put("productionAttempts",job.optInt("productionAttempts",0)+1)
+            job.remove("lastVerifyFailure")
+            job.remove("lastVerifyFailureDetail")
+            ExportJournal.write(context,id,job)
             if(path==ExportPath.DIRECT_COPY) {
                 val expected=job.getJSONArray("sources").getJSONObject(0).getString("sha256")
                 ExportTrace.measure(id,"directCopy") { copy(File(spec.clips.single().path),candidate,expected) }
@@ -46,24 +51,27 @@ internal object ExportProcessor {
                     }
                 }
             }
+            // Produce a durable identity before any decoder is opened so an interrupted or
+            // failed verification can be retried against exactly these bytes.
+            ExportFaults.beforeCheckpoint()
+            ExportCandidate.commit(context,id,candidate,spec)
+            ExportFaults.afterCheckpoint(candidate)
+            job=ExportJournal.read(context,id)!!
+            job.put("verificationAttempts",job.optInt("verificationAttempts",0)+1)
+            ExportJournal.write(context,id,job)
             ExportJournal.update(context,id,ExportState.Verifying)
-            ExportTrace.measure(id,"verifyGeometry") {
-                spec.captureProfile?.takeUnless { it.legacy }?.let { profile ->
-                    val output=inspect(candidate);val input=inspect(File(spec.clips.first().path))
-                    require(maxOf(output.width,output.height)==maxOf(profile.width,profile.height) && minOf(output.width,output.height)==minOf(profile.width,profile.height)) { "Export resolution does not match profile" }
-                    require(output.width==input.width && output.height==input.height) { "Export display orientation differs from source" }
-                }
-            }
-            return ExportTrace.measure(id,"verification") {
-                verify(candidate,spec.durationMs,id) { timing ->
-                    val checkpoint=ExportJournal.read(context,id)!!
-                    checkpoint.put("timingDiagnostic",timing);ExportJournal.write(context,id,checkpoint)
-                }
-            }
+            return verifyProduced(context,id,spec,candidate)
         }
         return try { attempt(selected) } catch(failure: Exception) {
+            val failureClass=classify(failure)
+            recordVerificationFailure(context,id,failure,failureClass)
             val ioFailure=generateSequence<Throwable>(failure) { it.cause }.any { it is IOException }
-            if(selected==ExportPath.RENDER || job.optBoolean("renderFallbackUsed") || ExportJournal.cancelRequested || ioFailure || freeBytes(context,candidate.parentFile!!)<=requiredBytes) throw failure
+            // A decoder failure is not evidence of bad media, and an immediate render would
+            // double the wait on the same failing decoder. Integrity failures may still be
+            // fixed by the standard renderer; every other failure keeps the existing path.
+            if(selected==ExportPath.RENDER || job.optBoolean("renderFallbackUsed") || ExportJournal.cancelRequested ||
+                ioFailure || failureClass!=ExportCandidate.FAILURE_INTEGRITY ||
+                freeBytes(context,candidate.parentFile!!)<=requiredBytes) throw failure
             checkCancelled()
             spec.clips.forEachIndexed { index, clip ->
                 check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source changed; fallback was not started" }
@@ -73,6 +81,63 @@ internal object ExportProcessor {
             ExportTrace.mark(id,"renderFallback")
             job=ExportJournal.read(context,id)!!
             attempt(ExportPath.RENDER)
+        }
+    }
+
+    /**
+     * Re-run every existing integrity check against a completed candidate using fresh
+     * extractors and decoders. Never used for normal completion or publication recovery.
+     */
+    fun reverify(context: Context, id: String, spec: ExportSpec, candidate: File): JSONObject {
+        ExportTrace.mark(id,"candidateReverifyStarted")
+        return verifyProduced(context,id,spec,candidate)
+    }
+
+    private fun verifyProduced(context: Context, id: String, spec: ExportSpec, candidate: File): JSONObject {
+        ExportTrace.measure(id,"verifyGeometry") {
+            try {
+                spec.captureProfile?.takeUnless { it.legacy }?.let { profile ->
+                    val output=inspect(candidate);val input=inspect(File(spec.clips.first().path))
+                    if(maxOf(output.width,output.height)!=maxOf(profile.width,profile.height) ||
+                        minOf(output.width,output.height)!=minOf(profile.width,profile.height))
+                        throw ExportIntegrityException("Export resolution does not match profile")
+                    if(output.width!=input.width || output.height!=input.height)
+                        throw ExportIntegrityException("Export display orientation differs from source")
+                }
+            } catch (failure: ExportIntegrityException) { throw failure
+            } catch (failure: Exception) {
+                throw ExportIntegrityException(failure.message ?: "Candidate geometry is unreadable.", failure)
+            }
+        }
+        return ExportTrace.measure(id,"verification") {
+            val report=verify(candidate,spec.durationMs,id) { timing ->
+                val checkpoint=ExportJournal.read(context,id)!!
+                checkpoint.put("timingDiagnostic",timing);ExportJournal.write(context,id,checkpoint)
+            }
+            val checkpoint=ExportCandidate.from(ExportJournal.read(context,id)!!)
+            if(checkpoint!=null && report.getString("sha256")!=checkpoint.sha256)
+                throw ExportIntegrityException("Candidate bytes changed during verification.")
+            report
+        }
+    }
+
+    private fun classify(failure: Throwable): String {
+        val chain=generateSequence(failure) { it.cause }.toList()
+        return when {
+            chain.any { it is ExportDecoderException } -> ExportCandidate.FAILURE_DECODER
+            chain.any { it is ExportIntegrityException } -> ExportCandidate.FAILURE_INTEGRITY
+            else -> ExportCandidate.FAILURE_OTHER
+        }
+    }
+
+    private fun recordVerificationFailure(context: Context, id: String, failure: Exception, kind: String) {
+        runCatching {
+            val job=ExportJournal.read(context,id) ?: return
+            if(job.optString("state")!=ExportState.Verifying.name) return
+            val detail=(failure as? ExportDecoderException)?.codecErrorCode?.let { "decoder error $it" }
+                ?: failure.message.orEmpty()
+            job.put("lastVerifyFailure",kind).put("lastVerifyFailureDetail",detail.take(400))
+            ExportJournal.write(context,id,job)
         }
     }
 
