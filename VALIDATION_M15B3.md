@@ -64,6 +64,10 @@ The final CI-equivalent command passed JVM tests (296 tests, no failures, errors
 - On the corrected ID, both export fixture tests and all twelve file-store/export-journal cases passed. The retry remained under the same job through cancellation and injected low space, published one non-pending result, and retained it on repeated launch. The two playback negative controls passed; intentional corrupt sources emitted preparation code `3003` for Play Skit and Review. These controls are not recurrences of the field decoder issue.
 - `tools/measure_field_sync.py` and its host tests add marker evidence without changing app timing or media processing. The control spans an aligned cue, deliberately late audio, a missing cue, a window-edge cue, and a change in offset. The on-device test additions use the existing real export service, journal and MediaStore publisher.
 
+## Export performance follow-up
+
+The 140 s wait was investigated in [M15B.3.1](VALIDATION_M15B3_EXPORT_PERFORMANCE.md). Saved trims forced the renderer; equivalent untrimmed bytes selected AVC passthrough with audio render. Removing an unnecessary eligibility scan saved about 3 s, but required rendering, audio processing and full verification dominate. Intermittent vendor-decoder failures during long exports were also observed and remain open. The earlier performance concern is therefore not resolved.
+
 ## Portrait capture evidence
 
 - First operator-driven validation session: rear camera, requested FHD, Auto FPS, stabilisation off. All ten sources were H.264 in a 1920×1080 raster with an FFprobe display matrix rotation of −90° (1080×1920 displayed), AAC stereo at 48 kHz, around 29.922–29.924 fps average. Both streams decoded end to end in all ten. All local copies match device SHA-256 values taken before edits.

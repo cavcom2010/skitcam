@@ -26,9 +26,57 @@ class FieldExportBenchmarkDeviceTest {
     private data class Case(val sources: List<Int>, val order: List<Int> = sources,
         val trims: Map<Int, Pair<Long, Long>> = emptyMap())
 
+    @Test fun cancelThenRetryPublishesOnce() {
+        check(context.packageName.matches(Regex("""com\.calvinmazhindu\.skitcam\.m15b31(base|candidate)\.m12bvalidation""")))
+        check(Build.VERSION.SDK_INT >= 30 && !ExportJournal.busy)
+        ExportJournal.cancelRequested = false
+        val id = UUID.randomUUID().toString()
+        val dir = File(context.filesDir, "sessions/$id").apply { check(mkdirs()) }
+        val source = File(staged, "segment_001.mp4")
+        val local = source.copyTo(File(dir, source.name))
+        val digest = sha(source)
+        assertEquals(digest, sha(local))
+        val duration = inspect(local).duration
+        val segment = Segment(1, local.path, duration, 0, 90, id = "$id-1")
+        val session = Session(id, System.currentTimeMillis(), 0, RecordingState.Completed, listOf(segment),
+            playbackOrder = listOf(segment.id),
+            captureProfile = CaptureProfile("fixture", VideoSettings("FHD"), 1920, 1080))
+        ExportJournal.request(context, session)
+        ExportJournal.finalised(context, session)
+        ExportService.launch(context, id)
+        val cancelDeadline = SystemClock.elapsedRealtime() + 120_000
+        while (ExportJournal.status.value?.state != ExportState.Exporting && SystemClock.elapsedRealtime() < cancelDeadline) {
+            SystemClock.sleep(20)
+        }
+        assertEquals(ExportState.Exporting, ExportJournal.status.value?.state)
+        ExportJournal.cancelRequested = true
+        val idleDeadline = SystemClock.elapsedRealtime() + 120_000
+        while (ExportJournal.busy && SystemClock.elapsedRealtime() < idleDeadline) SystemClock.sleep(50)
+        val cancelled = checkNotNull(ExportJournal.read(context, id))
+        assertEquals(ExportState.Cancelled.name, cancelled.getString("state"))
+        assertFalse(cancelled.getBoolean("publicationStarted"))
+        assertTrue(fieldPublicationRows(context, cancelled).isEmpty())
+        assertEquals(digest, sha(local))
+        ExportService.launch(context, id, retry = true)
+        val retryDeadline = SystemClock.elapsedRealtime() + 300_000
+        while (ExportJournal.busy && SystemClock.elapsedRealtime() < retryDeadline) SystemClock.sleep(50)
+        val completed = checkNotNull(ExportJournal.read(context, id))
+        assertEquals(cancelled.getString("id"), completed.getString("id"))
+        assertEquals(ExportState.Completed.name, completed.getString("state"))
+        assertEquals(listOf(Uri.parse(completed.getString("uri")) to false), fieldPublicationRows(context, completed))
+        assertEquals(digest, sha(local))
+        val results = File(context.filesDir, "m15b31-results").apply { mkdirs() }
+        val report = File(results, "cancel-retry-$id.json")
+        check(report.createNewFile())
+        report.writeText(JSONObject().put("case", "cancel-retry").put("sessionId", id)
+            .put("sameJob", true).put("rowsAfterCancel", 0).put("rowsAfterRetry", 1)
+            .put("sourceUnchanged", true).toString(2))
+    }
+
     @Test fun exportFixture() {
         check(context.packageName.matches(Regex("""com\.calvinmazhindu\.skitcam\.m15b31(base|candidate)\.m12bvalidation""")))
         check(Build.VERSION.SDK_INT >= 30 && !ExportJournal.busy)
+        ExportJournal.cancelRequested = false
         val args = InstrumentationRegistry.getArguments()
         val name = requireNotNull(args.getString("case"))
         val run = requireNotNull(args.getString("run")).toInt().also { require(it in 1..10) }

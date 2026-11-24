@@ -40,7 +40,7 @@ for entry in "$@"; do
     run=${BASH_REMATCH[2]}
     report="$kind-$run"
     test ! -e "$out/$report.json"
-    "${adb[@]}" shell am instrument --user 0 -w -r -e class "$base.export.FieldExportBenchmarkDeviceTest" \
+    "${adb[@]}" shell am instrument --user 0 -w -r -e class "$base.export.FieldExportBenchmarkDeviceTest#exportFixture" \
         -e case "$kind" -e run "$run" "$runner" > "$out/$report.log" 2>&1
     if grep -Fxq 'OK (1 test)' "$out/$report.log"; then
         "${adb[@]}" exec-out run-as "$pkg" cat "files/m15b31-results/$report.json" > "$out/$report.json"
