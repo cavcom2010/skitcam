@@ -181,7 +181,7 @@ The driver selects `FieldExportBenchmarkDeviceTest#exportFixture`, uses a fresh 
 - Benchmarks measure request → service idle; the historical camera-return reference is not a fresh Finish-to-camera comparison.
 - Audio transmux was not attempted. It is the largest remaining fast-path cost but must preserve per-item AAC priming and the 100 ms A/V bounds.
 - Concurrent or lighter verification was not attempted; it needs corrupt/truncated/wrong-order equivalence and must not raise vendor-decoder pressure.
-- The intermittent decoder failure is unresolved. A bounded re-verification of a completed candidate on Retry is the next evidence-led option.
+- The intermittent decoder failure is unresolved. A bounded re-verification of a completed candidate on Retry is now implemented and evaluated in [M15B.3.1A](VALIDATION_M15B3_VERIFICATION_RECOVERY.md); it avoids re-rendering when verification fails but does not fix the platform decoder, which also still fails during rendering.
 - Landscape field recording, real long takes, external microphones, physical sync markers, second-player acceptance and cross-device testing remain outstanding.
 - The M15B.2 Play Skit decoder/release risk remains open.
 
