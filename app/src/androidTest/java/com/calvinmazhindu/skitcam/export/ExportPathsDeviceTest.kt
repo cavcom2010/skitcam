@@ -257,7 +257,7 @@ class FieldPublicationDeviceTest {
 }
 
 @androidx.annotation.RequiresApi(30)
-private fun fieldPublicationRows(context: Context,job: JSONObject): List<Pair<Uri,Boolean>> {
+internal fun fieldPublicationRows(context: Context,job: JSONObject): List<Pair<Uri,Boolean>> {
     val collection=MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
     val id=job.getString("id")
     val stamp=SimpleDateFormat("yyyyMMdd_HHmmss",Locale.US).apply { timeZone=TimeZone.getTimeZone("UTC") }
