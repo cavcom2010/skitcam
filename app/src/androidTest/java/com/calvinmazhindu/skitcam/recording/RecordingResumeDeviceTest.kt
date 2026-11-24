@@ -222,8 +222,29 @@ class RecordingResumeDeviceTest {
             awaitPose()
             verifyUnchanged(before, hashes)
         }
-        activity { model.updateBattery(BatteryReading(5.0)) }
-        await("Resume disabled by critical battery") { resumeButton()?.isEnabled == false }
+        await("Resume available before battery injection") { resumeButton()?.isEnabled == true }
+        val critical = BatteryReading(5.0)
+        activity {
+            model.updateBattery(critical)
+            assertEquals(critical, model.battery.value)
+        }
+        var sawReplacement = false
+        var sawMissingButton = false
+        var sawEnabledDuringInjection = false
+        try {
+            await("Resume disabled while the injected battery reading is active") {
+                val active = model.battery.value == critical
+                val enabled = resumeButton()?.isEnabled
+                sawReplacement = sawReplacement || !active
+                sawMissingButton = sawMissingButton || enabled == null
+                sawEnabledDuringInjection = sawEnabledDuringInjection || (active && enabled == true)
+                active && enabled == false
+            }
+        } finally {
+            phase("battery probe: replaced=$sawReplacement missingResume=$sawMissingButton " +
+                "enabledDuringInjection=$sawEnabledDuringInjection finalReading=${model.battery.value} " +
+                "finalResumeEnabled=${resumeButton()?.isEnabled}")
+        }
         model.resume(expectedPose)
         await("runtime rejected low-battery Resume") { snapshot.message?.contains("battery") == true }
         verifyUnchanged(before, hashes)
