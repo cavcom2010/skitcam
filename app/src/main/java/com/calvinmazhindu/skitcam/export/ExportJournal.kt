@@ -105,7 +105,15 @@ object ExportJournal {
         val job=read(context,session.id) ?: return
         val state=ExportState.valueOf(job.getString("state"))
         if (state in setOf(ExportState.Preparing,ExportState.Exporting,ExportState.Verifying,ExportState.Publishing) && !busy) {
-            update(context,session.id,ExportState.Failed,"Finishing was interrupted. Retry starts safely from a saved checkpoint.")
+            val message=when {
+                state==ExportState.Verifying && job.optBoolean("candidateReverified") ->
+                    ExportCandidate.RETRY_REBUILD_MESSAGE
+                state!=ExportState.Publishing && ExportCandidate.from(job)!=null && !job.optBoolean("candidateReverified") &&
+                    job.optString("lastVerifyFailure") in setOf("",ExportCandidate.FAILURE_DECODER) ->
+                    ExportCandidate.RETRY_RECHECK_MESSAGE
+                else -> "Finishing was interrupted. Retry to continue. Original clips are preserved."
+            }
+            update(context,session.id,ExportState.Failed,message)
         } else status.value = statusFrom(session.id, job)
     }
 

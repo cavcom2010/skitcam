@@ -22,6 +22,8 @@ internal object ExportCandidate {
     const val FAILURE_DECODER = "decoder"
     const val FAILURE_INTEGRITY = "integrity"
     const val FAILURE_OTHER = "other"
+    const val RETRY_REBUILD_MESSAGE = "Checking the finished video was interrupted. Retry rebuilds it from the original clips."
+    const val RETRY_RECHECK_MESSAGE = "Checking the finished video was interrupted. Retry can re-check it without re-encoding if it is unchanged. Original clips are preserved."
 
     private val digestPattern = Regex("[0-9a-f]{64}")
 

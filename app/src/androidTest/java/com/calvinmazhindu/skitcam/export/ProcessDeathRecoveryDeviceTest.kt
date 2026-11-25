@@ -24,7 +24,7 @@ class ProcessDeathRecoveryDeviceTest {
     private val marker get() = File(context.filesDir, "m15b31a-death.json")
 
     @Before fun guard() {
-        check(context.packageName == ExportFaults.VALIDATION_PACKAGE)
+        check(ExportFaults.allowed(context))
         check(!ExportJournal.busy)
         ExportFaults.disarm()
     }
@@ -41,16 +41,27 @@ class ProcessDeathRecoveryDeviceTest {
         marker.writeText(JSONObject().put("session", f.session.id).put("phase", label)
             .put("source", f.session.segments.single().path)
             .put("sha256", f.hashes.single()).put("decoy", f.decoy.path).toString())
-        ExportFaults.arm(context, mode)
+        val duringRecheck=mode==ExportFaults.Mode.KILL_DURING_RECHECK
+        ExportFaults.arm(context, if(duringRecheck) ExportFaults.Mode.VIDEO_INIT else mode)
         ExportJournal.request(context, f.session)
         ExportJournal.finalised(context, f.session)
         ExportService.launch(context, f.session.id)
+        if(duringRecheck) {
+            awaitIdle(120_000)
+            val failed=checkNotNull(ExportJournal.read(context,f.session.id))
+            assertEquals("Failed",failed.getString("state"))
+            assertFalse(failed.optBoolean("candidateReverified"))
+            assertNotNull(ExportCandidate.from(failed))
+            assertTrue(fieldPublicationRows(context,failed).isEmpty())
+            ExportFaults.arm(context,mode)
+            ExportService.launch(context,f.session.id,retry=true)
+        }
         awaitIdle(120_000)
         fail("The injected process death did not occur during $label")
     }
 
     private fun phaseTwo(label: String, expectedProduction: Int, expectCheckpoint: Boolean,
-        expectVerification: Int) {
+        expectVerification: Int, expectConsumed: Boolean = false) {
         check(marker.isFile) { "Run the matching phase one first." }
         val saved = JSONObject(marker.readText())
         assertEquals(label, saved.getString("phase"))
@@ -58,10 +69,15 @@ class ProcessDeathRecoveryDeviceTest {
         val id = saved.getString("session")
         val before = checkNotNull(ExportJournal.read(context, id))
         val session = SessionCodec.decode(before.getString("session"))
-        assertEquals(ExportState.Exporting.name, before.getString("state"))
+        assertEquals(if(expectConsumed) "Verifying" else "Exporting", before.getString("state"))
         assertEquals(expectCheckpoint, ExportCandidate.from(before) != null)
+        assertEquals(expectConsumed,before.optBoolean("candidateReverified"))
+        assertTrue(fieldPublicationRows(context,before).isEmpty())
         ExportJournal.restore(context, session)
-        assertEquals(ExportState.Failed.name, checkNotNull(ExportJournal.read(context, id)).getString("state"))
+        val restored=checkNotNull(ExportJournal.read(context,id))
+        assertEquals(ExportState.Failed.name,restored.getString("state"))
+        if(expectConsumed) assertEquals(ExportCandidate.RETRY_REBUILD_MESSAGE,restored.getString("message"))
+        else if(expectCheckpoint) assertEquals(ExportCandidate.RETRY_RECHECK_MESSAGE,restored.getString("message"))
         ExportService.launch(context, id, retry = true)
         awaitIdle(300_000)
         val completed = checkNotNull(ExportJournal.read(context, id))
@@ -88,9 +104,16 @@ class ProcessDeathRecoveryDeviceTest {
     @Test fun phase1KillBeforeCandidateCheckpoint() =
         phaseOne(ExportFaults.Mode.KILL_BEFORE_CHECKPOINT, "beforeCheckpoint")
 
+    @Test fun phase1KillDuringCandidateRecheck() =
+        phaseOne(ExportFaults.Mode.KILL_DURING_RECHECK, "duringRecheck")
+
     @Test fun phase2AfterCheckpointReusesTheCandidate() =
         phaseTwo("afterCheckpoint", expectedProduction = 1, expectCheckpoint = true, expectVerification = 1)
 
     @Test fun phase2BeforeCheckpointRebuildsSafely() =
         phaseTwo("beforeCheckpoint", expectedProduction = 2, expectCheckpoint = false, expectVerification = 1)
+
+    @Test fun phase2ConsumedCandidateRebuildsSafely() =
+        phaseTwo("duringRecheck", expectedProduction = 2, expectCheckpoint = true,
+            expectVerification = 3, expectConsumed = true)
 }

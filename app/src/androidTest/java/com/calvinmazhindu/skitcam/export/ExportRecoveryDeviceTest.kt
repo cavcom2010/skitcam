@@ -22,7 +22,7 @@ class ExportRecoveryDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Before fun guard() {
-        check(context.packageName == ExportFaults.VALIDATION_PACKAGE)
+        check(ExportFaults.allowed(context))
         check(!ExportJournal.busy)
         ExportJournal.cancelRequested = false
         ExportFaults.disarm()
@@ -127,6 +127,7 @@ class ExportRecoveryDeviceTest {
         val first = job(f)
         assertEquals("Failed", first.getString("state"))
         assertEquals(ExportCandidate.FAILURE_DECODER, first.optString("lastVerifyFailure"))
+        assertEquals(ExportCandidate.RETRY_RECHECK_MESSAGE, first.getString("message"))
         assertEquals(1, first.optInt("productionAttempts", -1))
         assertNoRows(f)
         assertOriginals(f)
@@ -137,6 +138,7 @@ class ExportRecoveryDeviceTest {
         assertEquals("The second attempt re-checks, it does not render", 1, second.optInt("productionAttempts", -1))
         assertEquals(2, second.optInt("verificationAttempts", -1))
         assertTrue(second.optBoolean("candidateReverified"))
+        assertEquals(ExportCandidate.RETRY_REBUILD_MESSAGE, second.getString("message"))
         assertNoRows(f)
 
         retry(f); awaitIdle()

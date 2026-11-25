@@ -41,6 +41,9 @@ class ExportPathsDeviceTest {
         assertTrue(label,condition())
     }
     private fun golden(): File {
+        // The compatibility suite stages a retained, fully read-back export under its own app ID.
+        if(context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
+            return File(inputs,"golden.mp4").also { check(it.isFile) { "Stage the golden export first" } }
         val report=JSONObject(File(context.filesDir,"validation-m12b/baseline-single/single-0.json").readText())
         return File(context.filesDir,"sessions/${report.getString("sessionId")}/export/output.mp4")
     }
@@ -211,13 +214,16 @@ class ExportPathsDeviceTest {
 
     private fun requireFieldValidation() {
         // Retain the existing low-space test hook's .m12bvalidation suffix, not its old app ID.
-        check(context.packageName=="com.calvinmazhindu.skitcam.m15b3fixtures.m12bvalidation")
+        check(context.packageName=="com.calvinmazhindu.skitcam.m15b3fixtures.m12bvalidation" ||
+            context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
         check(Build.VERSION.SDK_INT>=30) { "These checks require MediaStore pending-row queries." }
     }
 
     @androidx.annotation.RequiresApi(30)
     private fun assertPublication(f: Fixture,job: JSONObject,copyName: String?) {
-        assertFieldPublication(context,job,copyName)
+        val reportName=if(context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
+            copyName?.let { "$it-${f.session.id}" } else copyName
+        assertFieldPublication(context,job,reportName)
         assertEquals(f.hashes,f.session.segments.map { sha(File(it.path)) })
     }
 
@@ -281,7 +287,7 @@ internal fun fieldPublicationRows(context: Context,job: JSONObject): List<Pair<U
 }
 
 @androidx.annotation.RequiresApi(30)
-private fun assertFieldPublication(context: Context,job: JSONObject,copyName: String?) {
+internal fun assertFieldPublication(context: Context,job: JSONObject,copyName: String?) {
     assertEquals("Completed",job.getString("state"))
     val uri=Uri.parse(job.getString("uri"))
     assertEquals(listOf(uri to false),fieldPublicationRows(context,job))

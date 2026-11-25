@@ -23,18 +23,22 @@ internal object ExportFaults {
         TRUNCATE_AFTER_CHECKPOINT,
         DELETE_AFTER_CHECKPOINT,
         KILL_BEFORE_CHECKPOINT,
-        KILL_AFTER_CHECKPOINT
+        KILL_AFTER_CHECKPOINT,
+        KILL_DURING_RECHECK
     }
 
     const val VALIDATION_PACKAGE = "com.calvinmazhindu.skitcam.m15b31a.m12bvalidation"
+    const val COMPATIBILITY_PACKAGE = "com.calvinmazhindu.skitcam.m15b31b.m12bvalidation"
     const val FAILURE_OUTPUT = 10
 
     @Volatile private var mode = Mode.NONE
     @Volatile private var armed = false
 
+    fun allowed(context: Context) = com.calvinmazhindu.skitcam.BuildConfig.DEBUG &&
+        (context.packageName == VALIDATION_PACKAGE || context.packageName == COMPATIBILITY_PACKAGE)
+
     fun arm(context: Context, value: Mode) {
-        require(com.calvinmazhindu.skitcam.BuildConfig.DEBUG &&
-            context.packageName == VALIDATION_PACKAGE) { "Fault injection is limited to the debug validation package." }
+        require(allowed(context)) { "Fault injection is limited to isolated debug validation packages." }
         mode = value
         armed = true
     }

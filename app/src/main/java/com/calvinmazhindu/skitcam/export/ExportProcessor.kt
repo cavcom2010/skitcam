@@ -90,7 +90,12 @@ internal object ExportProcessor {
      */
     fun reverify(context: Context, id: String, spec: ExportSpec, candidate: File): JSONObject {
         ExportTrace.mark(id,"candidateReverifyStarted")
-        return verifyProduced(context,id,spec,candidate)
+        return try {
+            verifyProduced(context,id,spec,candidate)
+        } catch (failure: Exception) {
+            recordVerificationFailure(context,id,failure,classify(failure))
+            throw failure
+        }
     }
 
     private fun verifyProduced(context: Context, id: String, spec: ExportSpec, candidate: File): JSONObject {

@@ -50,7 +50,8 @@ internal fun inspect(file: File): Geometry {
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal fun transform(context: Context, spec: ExportSpec, output: File, traceId: String? = null,
-    videoPassthrough: Boolean = false, onProgress: (Int?) -> Unit = {}) {
+    videoPassthrough: Boolean = false, decoderFactory: Codec.DecoderFactory? = null,
+    onProgress: (Int?) -> Unit = {}) {
     val sizes=spec.clips.map { inspect(File(it.path)) }
     val first=sizes.first()
     require(sizes.all { kotlin.math.abs(it.width.toDouble()/it.height-first.width.toDouble()/first.height)<0.005 }) { "Segments have incompatible display aspect ratios." }
@@ -85,7 +86,7 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, traceId
                 override fun videoNeedsEncoding()=!videoPassthrough
             }
             transformer=Transformer.Builder(context).setLooper(thread.looper).setEncoderFactory(factory)
-                .setAssetLoaderFactory(LeadingAudioGapFactory(context))
+                .setAssetLoaderFactory(LeadingAudioGapFactory(context, decoderFactory = decoderFactory))
                 .setVideoMimeType(MimeTypes.VIDEO_H264).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, result: ExportResult) { ExportTrace.mark(traceId,"transformCompleted");finished.countDown() }
@@ -141,7 +142,9 @@ private inline fun <T> codecCall(type: String, block: () -> T): T = try {
 }
 
 /** Full decode without speaker playback or retaining decoded frames. */
-internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagnostic: (JSONObject) -> Unit = {}): JSONObject {
+internal fun verify(file: File, expectedMs: Long, traceId: String? = null,
+    videoDecoder: String? = null, onDecoderOpened: ((String, String) -> Unit)? = null,
+    diagnostic: (JSONObject) -> Unit = {}): JSONObject {
     ExportTrace.measure(traceId,"verifyInspectBefore") {
         try { inspect(file) } catch (failure: Exception) {
             throw ExportIntegrityException("Candidate metadata is unreadable: ${failure.message}", failure)
@@ -169,8 +172,11 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
                 throw ExportDecoderException("Injected video decoder initialisation failure",
                     DECODER_UNKNOWN_ERROR)
             codecCall(type) {
-                codec=MediaCodec.createDecoderByType(mime);codec!!.configure(format,null,null,0);codec!!.start()
+                codec=if(type=="video/" && videoDecoder!=null) MediaCodec.createByCodecName(videoDecoder)
+                    else MediaCodec.createDecoderByType(mime)
+                codec.configure(format,null,null,0);codec.start()
             }
+            onDecoderOpened?.invoke(type,codecCall(type) { codec!!.name })
             ExportTrace.duration(traceId,"decoderSetup_$type",decodeStart)
             var inputDone=false;var outputDone=false;val order=PresentationOrder();var count=0
             val info=MediaCodec.BufferInfo();var lastWork=System.nanoTime()
@@ -231,6 +237,8 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null, diagn
                                 // Reproduce the vendor decoder releasing itself mid-stream.
                                 injectedRelease=true;codecCall(type) { codec!!.release() }
                             }
+                            type=="video/" && fault==ExportFaults.Mode.KILL_DURING_RECHECK ->
+                                ExportFaults.kill()
                         }
                     }
                     outputDone=info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0

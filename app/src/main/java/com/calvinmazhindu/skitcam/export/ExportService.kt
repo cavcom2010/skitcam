@@ -146,10 +146,14 @@ class ExportService : Service() {
             android.util.Log.e("SkitCamExport","Export failed",e)
             try {
                 val failureJob=runCatching { ExportJournal.read(this,id) }.getOrNull()
-                val interruptedCheck=failureJob?.optString("lastVerifyFailure")==ExportCandidate.FAILURE_DECODER
+                val interruptedCheck=failureJob?.takeIf { it.optString("state")==ExportState.Verifying.name &&
+                    it.optString("lastVerifyFailure")==ExportCandidate.FAILURE_DECODER }
                 val message=when {
                     ExportJournal.cancelRequested -> e.message ?: "Finishing cancelled."
-                    interruptedCheck -> "Checking the finished video was interrupted. Retry re-checks it without re-encoding. Original clips are preserved."
+                    interruptedCheck?.optBoolean("candidateReverified")==true ->
+                        ExportCandidate.RETRY_REBUILD_MESSAGE
+                    interruptedCheck!=null && ExportCandidate.from(interruptedCheck)!=null ->
+                        ExportCandidate.RETRY_RECHECK_MESSAGE
                     else -> e.message ?: "Finishing failed. Recording files are preserved."
                 }
                 ExportJournal.update(this,id,if(ExportJournal.cancelRequested) ExportState.Cancelled else ExportState.Failed,message)

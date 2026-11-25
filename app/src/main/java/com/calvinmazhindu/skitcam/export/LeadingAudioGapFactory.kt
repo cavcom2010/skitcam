@@ -14,8 +14,10 @@ import java.nio.ByteBuffer
  * Does not change source files, remove samples, or normalise audio independently of video.
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-internal class LeadingAudioGapFactory(private val context: Context, private val observed: (Long, Long) -> Unit = { _, _ -> }) : AssetLoader.Factory {
-    private val delegate = DefaultAssetLoaderFactory(context, DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, null)
+internal class LeadingAudioGapFactory(private val context: Context, decoderFactory: Codec.DecoderFactory? = null,
+    private val observed: (Long, Long) -> Unit = { _, _ -> }) : AssetLoader.Factory {
+    private val delegate = DefaultAssetLoaderFactory(context,
+        decoderFactory ?: DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, null)
     override fun createAssetLoader(item: EditedMediaItem, looper: Looper, listener: AssetLoader.Listener,
         settings: AssetLoader.CompositionSettings): AssetLoader {
         var durationUs = C.TIME_UNSET
