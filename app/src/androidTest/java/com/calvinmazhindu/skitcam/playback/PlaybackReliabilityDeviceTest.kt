@@ -1,8 +1,11 @@
 package com.calvinmazhindu.skitcam.playback
 
+import android.Manifest
 import android.graphics.Color
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
@@ -40,6 +43,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
+private const val FIELD_EMULATOR_PACKAGE = "com.calvinmazhindu.skitcam.m15b1m15b33emu"
+
 /** Reuses the real activity, controllers and surfaces without opening a production session. */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -63,7 +68,9 @@ class PlaybackReliabilityDeviceTest {
 
     @Before fun openFixture() {
         val packageName = context.packageName
-        check(packageName.matches(Regex("""com\.calvinmazhindu\.skitcam\.m15b2validation[0-9]*""")))
+        check(packageName.matches(Regex("""com\.calvinmazhindu\.skitcam\.m15b2validation[0-9]*""")) ||
+            packageName == FIELD_EMULATOR_PACKAGE && Build.HARDWARE == "ranchu")
+        if (packageName == FIELD_EMULATOR_PACKAGE) shell("pm grant $packageName ${Manifest.permission.CAMERA}")
         val id = "a15b2000-0000-4000-8000-000000000001"
         val inputs = listOf("first", "second", "third").map { File(data, "$it.mp4") }
         hashes = inputs.map(::sha)
@@ -103,6 +110,41 @@ class PlaybackReliabilityDeviceTest {
 
     @Test fun firstPlaybackInFreshProcess() {
         assertEquals(0, exercise("cold_start", 1) { startSkit() })
+    }
+
+    @Test fun fieldEmulatorPlaybackCloseAndScreenReturn() {
+        // Do not send screen-off or dismiss-keyguard actions to a physical device.
+        check(context.packageName == FIELD_EMULATOR_PACKAGE && Build.HARDWARE == "ranchu")
+        val model = activity.recordingModel
+        var cycle = 0
+        val failures = exercise("playback_close_resume", 10) {
+            cycle++
+            if (cycle == 4 || cycle == 8) {
+                startSkit()
+                try {
+                    shell("input keyevent KEYCODE_SLEEP")
+                    await("screen_off_releases_playback") { main { playback.player == null && !model.cameraReady } }
+                } finally {
+                    shell("input keyevent KEYCODE_WAKEUP")
+                    shell("wm dismiss-keyguard")
+                }
+                await("fixture_after_screen_wake") {
+                    model.snapshots.value.session?.id == fixture.id && model.cameraReady
+                }
+            }
+            val player = startSkit().player
+            resetPlayers()
+            await("paused_draft_after_close") {
+                val snapshot = model.snapshots.value
+                snapshot.state == RecordingState.Paused && snapshot.session?.id == fixture.id &&
+                    main { playback.player == null && review.player == null && model.cameraReady }
+            }
+            val restarted = startSkit().player
+            assertNotSame(player, restarted)
+            resetPlayers()
+            verifySources()
+        }
+        assertEquals("Inspect the emulator playback-close observations for failed cycles", 0, failures)
     }
 
     @Test fun playbackStress() {
@@ -403,6 +445,12 @@ class PlaybackReliabilityDeviceTest {
         }
         if (android.os.Build.VERSION.SDK_INT >= 33) instrument.uiAutomation.clearCache()
         return instrument.uiAutomation.rootInActiveWindow?.let(::search)
+    }
+
+    private fun shell(command: String) {
+        ParcelFileDescriptor.AutoCloseInputStream(instrument.uiAutomation.executeShellCommand(command)).use {
+            it.readBytes()
+        }
     }
 
     private fun <T> main(block: () -> T): T {

@@ -260,7 +260,8 @@ class FieldPublicationDeviceTest {
     @Test fun readBackNamedFieldJob() {
         val instrument=InstrumentationRegistry.getInstrumentation()
         val context=instrument.targetContext
-        check(context.packageName=="com.calvinmazhindu.skitcam.m15b3field" && Build.VERSION.SDK_INT>=30)
+        check(context.packageName in setOf("com.calvinmazhindu.skitcam.m15b3field", FIELD_ACCEPTANCE_PACKAGE)
+            && Build.VERSION.SDK_INT >= 30)
         val args=InstrumentationRegistry.getArguments()
         val session=checkNotNull(args.getString("fieldSession")) { "Provide the disposable session UUID." }
         check(UUID.fromString(session).toString()==session)
@@ -269,7 +270,12 @@ class FieldPublicationDeviceTest {
         val job=checkNotNull(ExportJournal.read(context,session))
         assertEquals(expected,job.getString("state"))
         if(expected=="Cancelled") assertTrue(fieldPublicationRows(context,job).isEmpty())
-        else assertFieldPublication(context,job,session)
+        else {
+            assertFieldPublication(context,job,session)
+            val after = ExportJournal.read(context,session)!!
+            assertEquals(job.getString("uri"), after.getString("uri"))
+            assertEquals(job.getString("verifiedSha"), after.getString("verifiedSha"))
+        }
     }
 }
 

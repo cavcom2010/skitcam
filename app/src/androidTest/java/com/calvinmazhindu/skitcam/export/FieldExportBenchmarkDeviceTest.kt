@@ -10,6 +10,7 @@ import com.calvinmazhindu.skitcam.recording.*
 import com.calvinmazhindu.skitcam.trim.TrimRange
 import com.calvinmazhindu.skitcam.video.CaptureProfile
 import com.calvinmazhindu.skitcam.video.VideoSettings
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -17,6 +18,8 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
+
+private const val ACCEPTANCE_BENCH_PACKAGE = "com.calvinmazhindu.skitcam.m15b33bench.m12bvalidation"
 
 /** Real service and publisher with owned staged sources; never opens the camera or microphone. */
 @RunWith(AndroidJUnit4::class)
@@ -74,7 +77,9 @@ class FieldExportBenchmarkDeviceTest {
     }
 
     @Test fun exportFixture() {
-        check(context.packageName.matches(Regex("""com\.calvinmazhindu\.skitcam\.m15b31(base|candidate)\.m12bvalidation""")))
+        val acceptance = context.packageName == ACCEPTANCE_BENCH_PACKAGE
+        check(acceptance || context.packageName.matches(
+            Regex("""com\.calvinmazhindu\.skitcam\.m15b31(base|candidate)\.m12bvalidation""")))
         check(Build.VERSION.SDK_INT >= 30 && !ExportJournal.busy)
         ExportJournal.cancelRequested = false
         val args = InstrumentationRegistry.getArguments()
@@ -83,13 +88,14 @@ class FieldExportBenchmarkDeviceTest {
         val sources = (1..11).toList()
         val kept = listOf(3, 1, 2, 4, 5, 6, 7, 8, 10, 11)
         val selected = when (name) {
+            "direct" -> Case(listOf(13))
             "single" -> Case(listOf(1))
             "multi" -> Case(listOf(1, 2, 3))
             "order" -> Case(listOf(1, 2, 3), listOf(3, 1, 2))
             "discard" -> Case(listOf(1, 2, 3, 4), listOf(1, 2, 3))
             "trim" -> Case(listOf(1, 2, 3), listOf(1, 2, 3), mapOf(2 to (1353L to 10461L)))
             "long" -> Case(listOf(12))
-            "real" -> Case(sources, kept, mapOf(2 to (1353L to 10461L), 3 to (2739L to 13066L)))
+            "real", "recheck" -> Case(sources, kept, mapOf(2 to (1353L to 10461L), 3 to (2739L to 13066L)))
             "realwhole" -> Case(sources, kept)
             else -> error("Unknown benchmark case")
         }
@@ -98,7 +104,9 @@ class FieldExportBenchmarkDeviceTest {
         check(!report.exists()) { "Use a fresh run number; evidence will not be overwritten." }
         val id = UUID.randomUUID().toString()
         val dir = File(context.filesDir, "sessions/$id").apply { check(mkdirs()) }
+        check(name !in setOf("direct", "recheck") || acceptance)
         val before = linkedMapOf<File, String>()
+        val orientation = if (name == "direct") 270 else 0
         val clips = selected.sources.map { number ->
             val source = File(staged, "segment_%03d.mp4".format(java.util.Locale.ROOT, number))
             val local = source.copyTo(File(dir, source.name))
@@ -106,19 +114,23 @@ class FieldExportBenchmarkDeviceTest {
             assertEquals(before[local], sha(local))
             val duration = inspect(local).duration
             val trim = selected.trims[number]?.let { TrimRange(duration, it.first, it.second) }
-            Segment(number, local.path, duration, 0, 90, kept = number in selected.order,
+            Segment(number, local.path, duration, orientation, if (name == "direct") 0 else 90, kept = number in selected.order,
                 id = "$id-$number", trim = trim)
         }
-        val session = Session(id, System.currentTimeMillis(), 0, RecordingState.Completed, clips,
+        val session = Session(id, System.currentTimeMillis(), orientation, RecordingState.Completed, clips,
             playbackOrder = selected.order.map { "$id-$it" },
-            captureProfile = CaptureProfile("fixture", VideoSettings("FHD"), 1920, 1080))
+            captureProfile = if (name == "direct") CaptureProfile("fixture", VideoSettings("HD"), 1280, 720)
+                else CaptureProfile("fixture", VideoSettings("FHD"), 1920, 1080))
+        val spec = ExportSpec.from(session) { it.durationMs }
+        val isRecheck = name == "recheck"
+        if (isRecheck) prepareInterruptedCheckpoint(session, spec, before, File(results, "real-$run.json"))
         val power = context.getSystemService(PowerManager::class.java)
         val thermalBefore = power.currentThermalStatus
         var peakThermal = thermalBefore
         val start = SystemClock.elapsedRealtimeNanos()
         ExportJournal.request(context, session)
         ExportJournal.finalised(context, session)
-        ExportService.launch(context, id)
+        ExportService.launch(context, id, retry = isRecheck)
         val deadline = SystemClock.elapsedRealtime() + 600_000
         while (ExportJournal.busy && SystemClock.elapsedRealtime() < deadline) {
             peakThermal = maxOf(peakThermal, power.currentThermalStatus)
@@ -126,12 +138,32 @@ class FieldExportBenchmarkDeviceTest {
         }
         val elapsedMs = (SystemClock.elapsedRealtimeNanos() - start) / 1_000_000.0
         val job = checkNotNull(ExportJournal.read(context, id))
-        assertEquals("Export did not complete", ExportState.Completed.name, job.getString("state"))
         assertFalse(ExportJournal.busy)
         val out = File(ExportJournal.directory(context, id), "output.mp4")
+        val trace = JSONObject(File(out.parentFile, "performance.json").readText())
+        val receipt = JSONObject().put("case", name).put("run", run).put("sessionId", id)
+            .put("jobId", job.getString("id")).put("state", job.getString("state"))
+            .put("path", job.optString("selectedPath")).put("reason", job.optString("pathReason"))
+            .put("elapsedMs", elapsedMs).put("outputBytes", out.length())
+            .put("sourceMs", spec.clips.sumOf { it.range.sourceDurationMs })
+            .put("keptMs", spec.durationMs).put("segments", spec.clips.size)
+            .put("thermalBefore", thermalBefore).put("thermalPeak", peakThermal)
+            .put("events", trace.getJSONObject("eventsMs")).put("spans", trace.getJSONArray("spans"))
+            .put("decoderTotals", trace.optJSONObject("decoderTotals")).put("bytes", trace.getJSONObject("bytes"))
+            .put("verificationAttempts", job.optInt("verificationAttempts"))
+            .put("productionAttempts", job.optInt("productionAttempts"))
         assertEquals(before, before.keys.associateWith(::sha))
+        val rows = fieldPublicationRows(context, job)
+        receipt.put("rows", JSONArray(rows.map { (uri, pending) -> JSONObject()
+            .put("uri", uri.toString()).put("pending", pending) }))
+        if (job.getString("state") != ExportState.Completed.name) {
+            receipt.put("lastVerifyFailure", job.optString("lastVerifyFailure"))
+            report.writeText(receipt.toString(2))
+            assertTrue("Failed benchmark unexpectedly left a public row", rows.none { !it.second })
+            error("Export benchmark did not complete (see isolated receipt).")
+        }
         val uri = Uri.parse(job.getString("uri"))
-        assertEquals(listOf(uri to false), fieldPublicationRows(context, job))
+        assertEquals(listOf(uri to false), rows)
         val digest = MessageDigest.getInstance("SHA-256")
         context.contentResolver.openInputStream(uri)!!.use { input ->
             val buffer = ByteArray(65536)
@@ -141,15 +173,52 @@ class FieldExportBenchmarkDeviceTest {
                 digest.update(buffer, 0, size)
             }
         }
-        assertEquals(job.getString("verifiedSha"), digest.digest().joinToString("") { "%02x".format(it) })
-        val trace = JSONObject(File(out.parentFile, "performance.json").readText())
-        report.writeText(JSONObject().put("case", name).put("run", run).put("sessionId", id)
-            .put("path", job.getString("selectedPath")).put("reason", job.getString("pathReason"))
-            .put("elapsedMs", elapsedMs).put("outputBytes", out.length())
-            .put("thermalBefore", thermalBefore).put("thermalPeak", peakThermal)
+        val readbackSha = digest.digest().joinToString("") { "%02x".format(it) }
+        assertEquals(job.getString("verifiedSha"), readbackSha)
+        val geometry = inspect(out)
+        report.writeText(receipt.put("readbackSha256", readbackSha)
             .put("verification", job.getJSONObject("verification"))
-            .put("events", trace.getJSONObject("eventsMs")).put("spans", trace.getJSONArray("spans"))
-            .put("decoderTotals", trace.optJSONObject("decoderTotals"))
-            .put("bytes", trace.getJSONObject("bytes")).toString(2))
+            .put("outputMs", geometry.duration).put("displayWidth", geometry.width).put("displayHeight", geometry.height)
+            .put("sourceSha256", JSONObject(before.mapKeys { it.key.name })).toString(2))
+        if (acceptance) {
+            val expected = when (name) {
+                "direct" -> ExportPath.DIRECT_COPY
+                "realwhole" -> ExportPath.VIDEO_PASSTHROUGH_AUDIO_RENDER
+                "real", "recheck" -> ExportPath.RENDER
+                else -> error("No acceptance expectation for this case")
+            }
+            assertEquals(expected.name, job.getString("selectedPath"))
+            assertEquals(1, job.getInt("verificationAttempts"))
+            assertEquals(if (isRecheck) 0 else 1, job.optInt("productionAttempts"))
+            if (isRecheck) assertTrue(trace.getJSONObject("eventsMs").has("candidateReverifyCommitted"))
+        }
+    }
+
+    /** Seed a finished, unverified checkpoint from the same batch's checked render bytes. */
+    private fun prepareInterruptedCheckpoint(session: Session, spec: ExportSpec, before: Map<File, String>, prior: File) {
+        val previous = JSONObject(prior.readText())
+        check(previous.getString("state") == ExportState.Completed.name &&
+            previous.getString("path") == ExportPath.RENDER.name)
+        val priorId = previous.getString("sessionId")
+        check(UUID.fromString(priorId).toString() == priorId && priorId != session.id)
+        val sourceHashes = previous.getJSONObject("sourceSha256")
+        check(before.all { (file, digest) -> sourceHashes.getString(file.name) == digest })
+        check(previous.getLong("keptMs") == spec.durationMs)
+        ExportJournal.request(context, session)
+        ExportJournal.finalised(context, session)
+        val id = session.id
+        val candidate = File(ExportJournal.directory(context, priorId), "output.mp4")
+            .copyTo(File(ExportJournal.directory(context, id), "output.mp4"))
+        check(sha(candidate) == previous.getString("readbackSha256"))
+        val job = ExportJournal.read(context, id)!!
+        job.put("selectedPath", ExportPath.RENDER.name).put("pathReason", "Interrupted checkpoint fixture")
+        job.put("sources", JSONArray(spec.clips.map { clip ->
+            JSONObject().put("id", clip.id).put("sha256", before.getValue(File(clip.path)))
+        }))
+        ExportJournal.write(context, id, job)
+        ExportCandidate.commit(context, id, candidate, spec)
+        ExportJournal.update(context, id, ExportState.Verifying)
+        ExportJournal.restore(context, session)
+        check(ExportJournal.read(context, id)!!.getString("state") == ExportState.Failed.name)
     }
 }
