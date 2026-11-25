@@ -17,6 +17,10 @@ object ExportJournal {
         get() = executing.value
         set(value) { executing.value=value }
     @Volatile var cancelRequested = false
+    @Synchronized fun cancel(id: String) {
+        if (status.value?.let { it.sessionId == id && it.active && it.state != ExportState.Publishing } == true)
+            cancelRequested = true
+    }
     @Synchronized fun clearStatus(id: String) {
         if (status.value?.sessionId == id) status.value = null
     }
@@ -84,10 +88,23 @@ object ExportJournal {
     @Synchronized fun update(context: Context, id: String, state: ExportState, message: String? = null, uri: String? = null) {
         val job=read(context,id) ?: error("Export journal unavailable")
         check(exportTransitionAllowed(ExportState.valueOf(job.getString("state")),state)) { "Invalid export transition." }
+        if (state == ExportState.Publishing && !job.optBoolean("publicationStarted") &&
+            job.has("publicationStarted") && job.optString("uri").isBlank()) job.put("publicationProtocolV2", true)
         job.put("state",state.name).put("message",message ?: "")
         if (state == ExportState.Publishing) job.put("publicationStarted", true)
         if(uri!=null) job.put("uri",uri)
         write(context,id,job)
+    }
+    @Synchronized fun beginPublication(context: Context, id: String) {
+        checkCancelled()
+        update(context, id, ExportState.Publishing)
+    }
+    @Synchronized fun markInsertAttempted(context: Context, id: String) {
+        val job = checkNotNull(read(context, id))
+        check(job.getString("state") == ExportState.Publishing.name && job.optBoolean("publicationProtocolV2") &&
+            !job.optBoolean("publicationInsertAttempted") && job.optString("uri").isBlank())
+        job.put("publicationInsertAttempted", true)
+        write(context, id, job)
     }
     /** Internal, bounded fallback only; user retry/publication transitions remain unchanged. */
     @Synchronized fun fallback(context: Context, id: String, reason: String) {
@@ -101,7 +118,7 @@ object ExportJournal {
         job.remove("candidateReverified")
         write(context,id,job)
     }
-    fun restore(context: Context, session: Session) {
+    @Synchronized fun restore(context: Context, session: Session) {
         val job=read(context,session.id) ?: return
         val state=ExportState.valueOf(job.getString("state"))
         if (state in setOf(ExportState.Preparing,ExportState.Exporting,ExportState.Verifying,ExportState.Publishing) && !busy) {

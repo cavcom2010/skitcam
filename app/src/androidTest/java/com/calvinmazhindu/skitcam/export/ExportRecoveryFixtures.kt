@@ -15,7 +15,7 @@ internal object ExportRecoveryFixtures {
     fun stagedInput(context: Context, name: String = "segment_001.mp4") =
         File(context.filesDir, "validation-m15b31a-inputs/$name")
 
-    fun fixture(context: Context, trim: Boolean = true): RecoveryFixture {
+    fun fixture(context: Context, trim: Boolean = true, count: Int = 1): RecoveryFixture {
         val source = stagedInput(context)
         require(source.isFile) { "Stage the validation media before running this suite." }
         val id = UUID.randomUUID().toString()
@@ -26,16 +26,19 @@ internal object ExportRecoveryFixtures {
             else TrimRange.full(facts.durationMs)
         require(range.valid()) { "Staged media is too short for a trimmed validation fixture." }
         val orientation = if (facts.rotation % 180 == 0) 270 else 0
-        val segment = Segment(1, target.path, facts.durationMs, orientation, facts.rotation,
-            kept = true, id = "$id-1", trim = range)
+        val segments = (1..count).map { index ->
+            val path = if (index == 1) target else source.copyTo(File(root, "segment_%03d.mp4".format(index)))
+            Segment(index, path.path, facts.durationMs, orientation, facts.rotation,
+                kept = true, id = "$id-$index", trim = range)
+        }
         val profile = CaptureProfile("fixture", VideoSettings(if (maxOf(facts.width, facts.height) > 1280) "FHD" else "HD"),
             facts.width, facts.height)
         val session = Session(id, System.currentTimeMillis(), orientation, RecordingState.Completed,
-            listOf(segment), playbackOrder = listOf(segment.id), captureProfile = profile)
+            segments, playbackOrder = segments.map { it.id }, captureProfile = profile)
         SessionFileStore(File(context.filesDir, "sessions")).save(session)
         // Proves candidate cleanup stays inside output.mp4 and never sweeps the job directory.
         val decoy = File(ExportJournal.directory(context, id), "unrelated-note.txt")
             .apply { writeText("not export media") }
-        return RecoveryFixture(session, listOf(sha(target)), decoy)
+        return RecoveryFixture(session, segments.map { sha(File(it.path)) }, decoy)
     }
 }

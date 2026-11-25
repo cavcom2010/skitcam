@@ -92,7 +92,7 @@ fun ExportScreen(status: ExportStatus, busy: Boolean, onNewRecording: () -> Unit
             if(status.active) CircularProgressIndicator()
             Text(feedback ?: status.message ?: "Your original recordings are preserved.",style=MaterialTheme.typography.bodyMedium)
             if(status.active && status.state!=ExportState.Publishing)
-                SkitCamSecondaryButton("Cancel export", { ExportJournal.cancelRequested=true })
+                SkitCamSecondaryButton("Cancel export", { ExportJournal.cancel(status.sessionId) })
             if (!status.active && status.state != ExportState.Completed)
                 Text("Your original clips are still on this device.", style = MaterialTheme.typography.bodyMedium)
             if(status.state in setOf(ExportState.Failed,ExportState.Cancelled))

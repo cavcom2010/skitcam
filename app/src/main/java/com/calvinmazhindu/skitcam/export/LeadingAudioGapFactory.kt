@@ -15,6 +15,7 @@ import java.nio.ByteBuffer
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class LeadingAudioGapFactory(private val context: Context, decoderFactory: Codec.DecoderFactory? = null,
+    private val passthroughVideo: ((Format) -> Unit)? = null,
     private val observed: (Long, Long) -> Unit = { _, _ -> }) : AssetLoader.Factory {
     private val delegate = DefaultAssetLoaderFactory(context,
         decoderFactory ?: DefaultDecoderFactory.Builder(context).build(), Clock.DEFAULT, null)
@@ -34,6 +35,7 @@ internal class LeadingAudioGapFactory(private val context: Context, decoderFacto
         return delegate.createAssetLoader(item, looper, object : AssetLoader.Listener by listener {
             override fun onDurationUs(duration: Long) { durationUs = duration;listener.onDurationUs(duration) }
             override fun onOutputFormat(format: Format): SampleConsumer? {
+                if (MimeTypes.isVideo(format.sampleMimeType)) passthroughVideo?.invoke(format)
                 val consumer = listener.onOutputFormat(format) ?: return null
                 if(format.sampleMimeType != MimeTypes.AUDIO_RAW) return consumer
                 return LeadingAudioGapConsumer(consumer, format, sourceGapUs, { durationUs }, observed)

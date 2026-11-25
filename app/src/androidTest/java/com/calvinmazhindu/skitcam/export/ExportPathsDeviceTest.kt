@@ -2,6 +2,7 @@ package com.calvinmazhindu.skitcam.export
 
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Build
@@ -42,7 +43,7 @@ class ExportPathsDeviceTest {
     }
     private fun golden(): File {
         // The compatibility suite stages a retained, fully read-back export under its own app ID.
-        if(context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
+        if(context.packageName in setOf(ExportFaults.COMPATIBILITY_PACKAGE, ExportFaults.HARDENING_PACKAGE))
             return File(inputs,"golden.mp4").also { check(it.isFile) { "Stage the golden export first" } }
         val report=JSONObject(File(context.filesDir,"validation-m12b/baseline-single/single-0.json").readText())
         return File(context.filesDir,"sessions/${report.getString("sessionId")}/export/output.mp4")
@@ -153,10 +154,20 @@ class ExportPathsDeviceTest {
             .put("verifiedSha",report.getString("sha256")).put("verification",report)
         ExportJournal.write(context,f.session.id,job)
         ExportJournal.update(context,f.session.id,ExportState.Publishing)
+        ExportJournal.markInsertAttempted(context,f.session.id)
+        val pending = checkNotNull(context.contentResolver.insert(
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, galleryName(job.getLong("createdAt"),job.getString("id")))
+                put(MediaStore.Video.Media.DESCRIPTION, "SkitCam export job:${job.getString("id")}")
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, GALLERY_PATH)
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            })).toString()
+        ExportJournal.update(context,f.session.id,ExportState.Publishing,uri=pending)
         output.writeText("changed after verification")
         try { publish(context,f.session.id,output,job.getString("id"));fail("Changed candidate must not publish") }
         catch(_: IllegalStateException) { }
-        val pending=ExportJournal.read(context,f.session.id)!!.getString("uri")
+        assertEquals(pending,ExportJournal.read(context,f.session.id)!!.getString("uri"))
         context.contentResolver.query(Uri.parse(pending),arrayOf(MediaStore.Video.Media.IS_PENDING),null,null,null)!!.use {
             assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))
         }
@@ -215,13 +226,13 @@ class ExportPathsDeviceTest {
     private fun requireFieldValidation() {
         // Retain the existing low-space test hook's .m12bvalidation suffix, not its old app ID.
         check(context.packageName=="com.calvinmazhindu.skitcam.m15b3fixtures.m12bvalidation" ||
-            context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
+            context.packageName in setOf(ExportFaults.COMPATIBILITY_PACKAGE, ExportFaults.HARDENING_PACKAGE))
         check(Build.VERSION.SDK_INT>=30) { "These checks require MediaStore pending-row queries." }
     }
 
     @androidx.annotation.RequiresApi(30)
     private fun assertPublication(f: Fixture,job: JSONObject,copyName: String?) {
-        val reportName=if(context.packageName==ExportFaults.COMPATIBILITY_PACKAGE)
+        val reportName=if(context.packageName in setOf(ExportFaults.COMPATIBILITY_PACKAGE, ExportFaults.HARDENING_PACKAGE))
             copyName?.let { "$it-${f.session.id}" } else copyName
         assertFieldPublication(context,job,reportName)
         assertEquals(f.hashes,f.session.segments.map { sha(File(it.path)) })

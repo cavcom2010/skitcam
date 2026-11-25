@@ -10,6 +10,8 @@ import com.calvinmazhindu.skitcam.recording.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -34,10 +36,11 @@ class ExportService : Service() {
     }
     private val executor=Executors.newSingleThreadExecutor()
     private var sessionId: String?=null
+    @Volatile private var timedOut = false
     override fun onBind(intent: Intent?)=null
     override fun onStartCommand(intent: Intent?,flags: Int,startId: Int): Int {
         val id=intent?.getStringExtra("session") ?: return START_NOT_STICKY
-        if(intent.action=="cancel") { if(sessionId==id) ExportJournal.cancelRequested=true;return START_NOT_STICKY }
+        if(intent.action=="cancel") { if(sessionId==id) ExportJournal.cancel(id);return START_NOT_STICKY }
         if(!running.compareAndSet(false,true)) return START_NOT_STICKY
         val retry=intent.getBooleanExtra("retry",false)
         sessionId=id;ExportJournal.busy=true
@@ -74,6 +77,13 @@ class ExportService : Service() {
                 Thread.sleep(100);job=ExportJournal.read(this,id)!!
             }
             checkCancelled()
+            val candidate=File(directory,"output.mp4")
+            if (SessionCleanup.mayHavePublished(job)) {
+                // Resolve an existing publication before considering a rebuild. Its original
+                // digest is authoritative even if the private candidate has since disappeared.
+                finishPublication(id, candidate, job.getString("id"))
+                return
+            }
             val session=SessionCodec.decode(job.getString("session"))
             ExportTrace.mark(id,"serviceSnapshotReady")
             val sessionRoot=java.io.File(filesDir,"sessions/$id").canonicalFile
@@ -94,23 +104,28 @@ class ExportService : Service() {
             }) { "Saved export specification is invalid." }
             if(spec.clips.isEmpty()) { ExportJournal.update(this,id,ExportState.Empty,"No retained segments. Original files are preserved.");return }
             if(!job.has("sources")) {
-                val sources=JSONArray()
-                ExportTrace.measure(id,"sourceHashSnapshot") {
-                    spec.clips.forEach { clip -> checkCancelled();sources.put(JSONObject().put("id",clip.id).put("sha256",sha(File(clip.path))));ExportTrace.bytes(id,"sourceHashRead",File(clip.path).length()) }
+                val sources = ExportTrace.measure(id, "sourceHashSnapshot") {
+                    JSONArray().apply {
+                        spec.clips.forEach { clip ->
+                            checkCancelled()
+                            val source = File(clip.path)
+                            put(JSONObject().put("id", clip.id).put("sha256", sha(source)))
+                            ExportTrace.bytes(id, "sourceHashRead", source.length())
+                        }
+                    }
                 }
                 job.put("sources",sources).put("spec",JSONArray().apply {
                     spec.clips.forEach { put(JSONObject().put("id",it.id).put("path",it.path).put("duration",it.range.sourceDurationMs).put("start",it.range.trimStartMs).put("end",it.range.trimEndMs)) }
                 })
                 ExportJournal.write(this,id,job)
             }
-            val candidate=File(directory,"output.mp4")
             val verified=job.optString("verifiedSha")
-            val reusable=verified.isNotBlank() && candidate.isFile &&
+            val reusable=verified.isNotBlank() && Files.isRegularFile(candidate.toPath(), NOFOLLOW_LINKS) &&
                 ExportTrace.measure(id,"verifiedCheckpointHash") { sha(candidate)==verified }
             if(!reusable) {
                 // Only an explicit Retry may re-check the completed, unverified bytes from
                 // the previous attempt. Nothing here can publish without the full verifier.
-                val reused=retry && reuseCompletedCandidate(id,spec,outputProfile,candidate)
+                val reused=retry && reuseCompletedCandidate(id,spec,candidate)
                 if(!reused) {
                     // The reuse probe may have recorded its rejection on the journal.
                     job=ExportJournal.read(this,id)!!
@@ -137,11 +152,7 @@ class ExportService : Service() {
                     ExportTrace.measure(id,"verifiedCheckpointCommit") { ExportJournal.write(this,id,job) }
                 }
             }
-            checkCancelled()
-            ExportJournal.update(this,id,ExportState.Publishing)
-            val uri=ExportTrace.measure(id,"publication") { publish(this,id,candidate,job.getString("id")) }
-            ExportJournal.update(this,id,ExportState.Completed,"Saved to Movies/SkitCam",uri.toString())
-            ExportTrace.mark(id,"published")
+            finishPublication(id, candidate, job.getString("id"))
         } catch(e: Exception) {
             android.util.Log.e("SkitCamExport","Export failed",e)
             try {
@@ -149,6 +160,7 @@ class ExportService : Service() {
                 val interruptedCheck=failureJob?.takeIf { it.optString("state")==ExportState.Verifying.name &&
                     it.optString("lastVerifyFailure")==ExportCandidate.FAILURE_DECODER }
                 val message=when {
+                    timedOut -> "System processing time limit reached. Sources are retained."
                     ExportJournal.cancelRequested -> e.message ?: "Finishing cancelled."
                     interruptedCheck?.optBoolean("candidateReverified")==true ->
                         ExportCandidate.RETRY_REBUILD_MESSAGE
@@ -156,24 +168,34 @@ class ExportService : Service() {
                         ExportCandidate.RETRY_RECHECK_MESSAGE
                     else -> e.message ?: "Finishing failed. Recording files are preserved."
                 }
-                ExportJournal.update(this,id,if(ExportJournal.cancelRequested) ExportState.Cancelled else ExportState.Failed,message)
+                val cancelled = ExportJournal.cancelRequested && !timedOut && failureJob?.optBoolean("publicationStarted") != true
+                ExportJournal.update(this,id,if(cancelled) ExportState.Cancelled else ExportState.Failed,message)
             } catch(_: Exception) { }
         } finally {
             if(wakeLock?.isHeld==true) wakeLock.release()
             ExportTrace.mark(id,"serviceIdle")
             ExportTrace.flush(this,id)
-            stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
-            running.set(false);ExportJournal.busy=false
+            Handler(Looper.getMainLooper()).post {
+                synchronized(ExportJournal) {
+                    stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
+                    running.set(false);ExportJournal.busy=false
+                }
+            }
         }
+    }
+
+    private fun finishPublication(id: String, candidate: File, jobId: String) {
+        ExportJournal.beginPublication(this,id)
+        val uri=ExportTrace.measure(id,"publication") { publish(this,id,candidate,jobId) }
+        ExportJournal.update(this,id,ExportState.Completed,"Saved to Movies/SkitCam",uri.toString())
+        ExportTrace.mark(id,"published")
     }
     /**
      * Re-check the bytes produced by the previous attempt when the user explicitly retries
      * after a decoder failure. The allowance is journaled before any decoder is opened, so a
      * crash cannot reset it. On any doubt the caller falls back to the normal rebuild path.
      */
-    private fun reuseCompletedCandidate(id: String, spec: ExportSpec,
-        outputProfile: com.calvinmazhindu.skitcam.video.CaptureProfile?, candidate: File): Boolean {
-        val directory=ExportJournal.directory(this,id)
+    private fun reuseCompletedCandidate(id: String, spec: ExportSpec, candidate: File): Boolean {
         var job=ExportJournal.read(this,id) ?: return false
         val assessment=ExportTrace.measure(id,"candidateReuseProbe") {
             ExportCandidate.assess(this,id,spec,job,candidate,retry=true)
@@ -196,9 +218,6 @@ class ExportService : Service() {
             ExportJournal.write(this,id,rejected)
         } }.isSuccess
         if(!sourcesMatch) return false
-        check(ExportProcessor.freeBytes(this,directory)>requiredBytes(spec,outputProfile)) {
-            "Insufficient space for finishing and gallery copy."
-        }
         val bytesMatch=ExportTrace.measure(id,"candidateCheckpointHash") {
             candidate.length()==checkpoint.bytes && sha(candidate)==checkpoint.sha256
         }
@@ -208,20 +227,21 @@ class ExportService : Service() {
             ExportJournal.write(this,id,job)
             return false
         }
+        checkGallerySpace(this,candidate)
         awaitCameraRelease(id)
+        checkCancelled()
         job=ExportJournal.read(this,id)!!
         // Durable before the decoder is opened: a later crash or failure cannot grant a
         // second free re-check of the same bytes.
         job.put("candidateReverified",true)
             .put("verificationAttempts",job.optInt("verificationAttempts",0)+1)
             .remove("candidateReuseRejected")
+        job.remove("lastVerifyFailure")
+        job.remove("lastVerifyFailureDetail")
         ExportJournal.write(this,id,job)
         ExportTrace.mark(id,"candidateReverifyCommitted")
         ExportJournal.update(this,id,ExportState.Verifying)
-        val report=ExportProcessor.reverify(this,id,spec,candidate)
-        check(report.getString("sha256")==checkpoint.sha256) {
-            "Re-verified bytes no longer match the completed candidate."
-        }
+        val report=ExportProcessor.reverify(this,id,spec,candidate,checkpoint.sha256)
         val committed=ExportJournal.read(this,id)!!
         committed.put("verifiedSha",report.getString("sha256")).put("verification",report)
         committed.remove("candidate")
@@ -248,8 +268,8 @@ class ExportService : Service() {
         } ?: Math.addExact(Math.multiplyExact(spec.durationMs,1032L),100L*1024*1024)
 
     override fun onTimeout(startId: Int,fgsType: Int) {
+        timedOut=true
         ExportJournal.cancelRequested=true
-        sessionId?.let { ExportJournal.update(this,it,ExportState.Failed,"System processing time limit reached. Sources are retained.") }
         stopForeground(STOP_FOREGROUND_REMOVE);stopSelf()
     }
     override fun onDestroy() { executor.shutdown();super.onDestroy() }

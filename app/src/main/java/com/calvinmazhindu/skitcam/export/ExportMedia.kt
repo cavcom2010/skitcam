@@ -13,6 +13,7 @@ import com.calvinmazhindu.skitcam.recording.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -74,6 +75,7 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, traceId
     }
     val composition=Composition.Builder(EditedMediaItemSequence.withAudioAndVideoFrom(items))
         .setTransmuxAudio(false).setTransmuxVideo(videoPassthrough).build()
+    val passthrough = if (videoPassthrough) PassthroughProduction() else null
     val thread=HandlerThread("SkitCam export").apply { start() };val handler=Handler(thread.looper)
     val finished=CountDownLatch(1);var failure: Exception?=null;var transformer: Transformer?=null
     handler.post {
@@ -86,7 +88,9 @@ internal fun transform(context: Context, spec: ExportSpec, output: File, traceId
                 override fun videoNeedsEncoding()=!videoPassthrough
             }
             transformer=Transformer.Builder(context).setLooper(thread.looper).setEncoderFactory(factory)
-                .setAssetLoaderFactory(LeadingAudioGapFactory(context, decoderFactory = decoderFactory))
+                .apply { if (passthrough != null) setMuxerFactory(passthrough.muxerFactory()) }
+                .setAssetLoaderFactory(LeadingAudioGapFactory(context, decoderFactory = decoderFactory,
+                    passthroughVideo = passthrough?.let { it::checkVideo }))
                 .setVideoMimeType(MimeTypes.VIDEO_H264).setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, result: ExportResult) { ExportTrace.mark(traceId,"transformCompleted");finished.countDown() }
@@ -122,6 +126,16 @@ internal class ExportIntegrityException(message: String, cause: Throwable? = nul
 internal class ExportDecoderException(message: String, val codecErrorCode: Int?, cause: Throwable? = null) :
     IllegalStateException(message, cause)
 
+internal fun classifyVerificationFailure(failure: Throwable): String {
+    val chain = generateSequence(failure) { it.cause }.toList()
+    return when {
+        chain.any { it is ExportDecoderException } -> ExportCandidate.FAILURE_DECODER
+        chain.any { it is IOException } -> ExportCandidate.FAILURE_OTHER
+        chain.any { it is ExportIntegrityException } -> ExportCandidate.FAILURE_INTEGRITY
+        else -> ExportCandidate.FAILURE_OTHER
+    }
+}
+
 /**
  * Only exceptions raised by MediaCodec calls become [ExportDecoderException]. Our own
  * integrity checks and cancellation remain distinguishable.
@@ -141,10 +155,18 @@ private inline fun <T> codecCall(type: String, block: () -> T): T = try {
     throw ExportDecoderException("$type decoder state error: ${failure.message}", null, failure)
 }
 
+/** MediaCodec declares IOException for creation only. Do not wrap extractor or file I/O. */
+internal inline fun <T> openVerifierCodec(type: String, create: () -> T): T = try {
+    create()
+} catch (failure: IOException) {
+    throw ExportDecoderException("$type decoder could not be opened: ${failure.message}", null, failure)
+}
+
 /** Full decode without speaker playback or retaining decoded frames. */
 internal fun verify(file: File, expectedMs: Long, traceId: String? = null,
     videoDecoder: String? = null, onDecoderOpened: ((String, String) -> Unit)? = null,
     diagnostic: (JSONObject) -> Unit = {}): JSONObject {
+    checkCancelled()
     ExportTrace.measure(traceId,"verifyInspectBefore") {
         try { inspect(file) } catch (failure: Exception) {
             throw ExportIntegrityException("Candidate metadata is unreadable: ${failure.message}", failure)
@@ -159,6 +181,7 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null,
         var inputWaitNs=0L;var outputWaitNs=0L;var sampleReadNs=0L
         var inputMisses=0;var outputMisses=0
         try {
+            if (ExportFaults.has(ExportFaults.Mode.VERIFIER_EXTRACTOR_IO)) throw IOException("Injected extractor input I/O")
             extractor.setDataSource(file.path)
             val track=(0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith(type) }
             val format=extractor.getTrackFormat(track);val mime=format.getString(MediaFormat.KEY_MIME)!!
@@ -168,12 +191,13 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null,
                 format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)!=2))
                 throw ExportIntegrityException("Unexpected audio output format.")
             extractor.selectTrack(track)
-            if(type=="video/" && fault==ExportFaults.Mode.VIDEO_INIT)
-                throw ExportDecoderException("Injected video decoder initialisation failure",
-                    DECODER_UNKNOWN_ERROR)
             codecCall(type) {
-                codec=if(type=="video/" && videoDecoder!=null) MediaCodec.createByCodecName(videoDecoder)
+                codec=openVerifierCodec(type) {
+                    if (type=="video/" && ExportFaults.has(ExportFaults.Mode.VIDEO_INIT))
+                        throw IOException("Injected codec creation I/O")
+                    if(type=="video/" && videoDecoder!=null) MediaCodec.createByCodecName(videoDecoder)
                     else MediaCodec.createDecoderByType(mime)
+                }
                 codec.configure(format,null,null,0);codec.start()
             }
             onDecoderOpened?.invoke(type,codecCall(type) { codec!!.name })
@@ -185,7 +209,9 @@ internal fun verify(file: File, expectedMs: Long, traceId: String? = null,
             var outputFormat: MediaFormat? = null
             var injectedRelease=false
             while(!outputDone) {
-                checkCancelled();check(System.nanoTime()-lastWork<TimeUnit.SECONDS.toNanos(30)) { "Output decoder stalled." }
+                checkCancelled()
+                if (System.nanoTime()-lastWork>=TimeUnit.SECONDS.toNanos(30))
+                    throw ExportDecoderException("$type output decoder stalled.", null)
                 if(!inputDone) {
                     val waitStart=ExportTrace.now()
                     val index=codecCall(type) { codec!!.dequeueInputBuffer(1000) }

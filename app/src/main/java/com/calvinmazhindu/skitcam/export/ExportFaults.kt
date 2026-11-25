@@ -24,31 +24,50 @@ internal object ExportFaults {
         DELETE_AFTER_CHECKPOINT,
         KILL_BEFORE_CHECKPOINT,
         KILL_AFTER_CHECKPOINT,
-        KILL_DURING_RECHECK
+        KILL_DURING_RECHECK,
+        KILL_BEFORE_INSERT,
+        KILL_AFTER_INSERT,
+        KILL_AFTER_INSERT_INTENT,
+        KILL_DURING_GALLERY_WRITE,
+        KILL_BEFORE_VISIBLE,
+        KILL_AFTER_VISIBLE,
+        FORBID_GALLERY_WRITE,
+        NULL_GALLERY_QUERY,
+        EMPTY_GALLERY_QUERY,
+        FAILED_GALLERY_QUERY,
+        AMBIGUOUS_GALLERY_QUERY,
+        FORMAT_WITHOUT_AVC_CONFIG,
+        RENDER_PRODUCTION_IO,
+        CANCEL_AT_PASSTHROUGH,
+        KILL_AFTER_PATH_TRANSITION,
+        VERIFIER_EXTRACTOR_IO,
+        WRONG_VERIFICATION_DURATION,
+        GALLERY_STORAGE_EXHAUSTED,
     }
 
     const val VALIDATION_PACKAGE = "com.calvinmazhindu.skitcam.m15b31a.m12bvalidation"
     const val COMPATIBILITY_PACKAGE = "com.calvinmazhindu.skitcam.m15b31b.m12bvalidation"
     const val FAILURE_OUTPUT = 10
 
-    @Volatile private var mode = Mode.NONE
-    @Volatile private var armed = false
+    const val HARDENING_PACKAGE = "com.calvinmazhindu.skitcam.m15b32.m12bvalidation"
+    @Volatile private var modes = emptySet<Mode>()
 
     fun allowed(context: Context) = com.calvinmazhindu.skitcam.BuildConfig.DEBUG &&
-        (context.packageName == VALIDATION_PACKAGE || context.packageName == COMPATIBILITY_PACKAGE)
+        context.packageName in setOf(VALIDATION_PACKAGE, COMPATIBILITY_PACKAGE, HARDENING_PACKAGE)
 
-    fun arm(context: Context, value: Mode) {
+    fun arm(context: Context, vararg values: Mode) {
         require(allowed(context)) { "Fault injection is limited to isolated debug validation packages." }
-        mode = value
-        armed = true
+        modes = values.toSet()
     }
 
-    fun disarm() {
-        mode = Mode.NONE
-        armed = false
-    }
+    fun disarm() { modes = emptySet() }
 
-    fun current(): Mode = if (armed) mode else Mode.NONE
+    fun current(): Mode = modes.firstOrNull() ?: Mode.NONE
+    fun has(mode: Mode): Boolean = mode in modes
+
+    fun publicationPoint(mode: Mode) {
+        if (has(mode)) kill()
+    }
 
     /** Called after production and before the candidate checkpoint is committed. */
     fun beforeCheckpoint() {

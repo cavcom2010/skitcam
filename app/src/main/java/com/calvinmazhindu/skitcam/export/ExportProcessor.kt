@@ -30,8 +30,10 @@ internal object ExportProcessor {
             job.put("selectedPath",decision.path.name).put("pathReason",decision.reason)
             ExportJournal.write(context,id,job)
         }
-        val selected=ExportPath.valueOf(job.getString("selectedPath"))
+        var selected=ExportPath.valueOf(job.getString("selectedPath"))
+        var verifying = false
         fun attempt(path: ExportPath): JSONObject {
+            verifying = false
             job=ExportJournal.read(context,id)!!
             job.put("productionAttempts",job.optInt("productionAttempts",0)+1)
             job.remove("lastVerifyFailure")
@@ -43,6 +45,8 @@ internal object ExportProcessor {
                 ExportTrace.bytes(id,"directCopyBytes",candidate.length())
             } else {
                 ExportTrace.measure(id,"transform") {
+                    if (path == ExportPath.RENDER && ExportFaults.has(ExportFaults.Mode.RENDER_PRODUCTION_IO))
+                        throw IOException("Injected renderer production I/O")
                     transform(context,spec,candidate,id,path==ExportPath.VIDEO_PASSTHROUGH_AUDIO_RENDER) { percent ->
                         ExportJournal.status.value?.takeIf { it.sessionId==id && it.state==ExportState.Exporting }?.let { status ->
                             val verb=if(path==ExportPath.RENDER) "Encoding" else "Processing audio · preserving video"
@@ -60,27 +64,39 @@ internal object ExportProcessor {
             job.put("verificationAttempts",job.optInt("verificationAttempts",0)+1)
             ExportJournal.write(context,id,job)
             ExportJournal.update(context,id,ExportState.Verifying)
-            return verifyProduced(context,id,spec,candidate)
+            verifying = true
+            return verifyAttempt(context,id,spec,candidate)
         }
-        return try { attempt(selected) } catch(failure: Exception) {
-            val failureClass=classify(failure)
-            recordVerificationFailure(context,id,failure,failureClass)
-            val ioFailure=generateSequence<Throwable>(failure) { it.cause }.any { it is IOException }
-            // A decoder failure is not evidence of bad media, and an immediate render would
-            // double the wait on the same failing decoder. Integrity failures may still be
-            // fixed by the standard renderer; every other failure keeps the existing path.
-            if(selected==ExportPath.RENDER || job.optBoolean("renderFallbackUsed") || ExportJournal.cancelRequested ||
-                ioFailure || failureClass!=ExportCandidate.FAILURE_INTEGRITY ||
-                freeBytes(context,candidate.parentFile!!)<=requiredBytes) throw failure
-            checkCancelled()
-            spec.clips.forEachIndexed { index, clip ->
-                check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) { "Source changed; fallback was not started" }
+        while (true) {
+            try { return attempt(selected) } catch(failure: Exception) {
+                val incompatibility = if (!verifying && selected == ExportPath.VIDEO_PASSTHROUGH_AUDIO_RENDER)
+                    generateSequence<Throwable>(failure) { it.cause }
+                        .filterIsInstance<ExportPassthroughIncompatibility>().firstOrNull()
+                else null
+                val badFastCandidate = verifying && classifyVerificationFailure(failure) == ExportCandidate.FAILURE_INTEGRITY
+                if (selected == ExportPath.RENDER || job.optBoolean("renderFallbackUsed") ||
+                    ExportJournal.cancelRequested || (incompatibility == null && !badFastCandidate)) throw failure
+
+                // Commit the path before more IO or production. Retry then starts directly in RENDER,
+                // including if the process dies or there isn't enough space to fall back now.
+                ExportJournal.fallback(context,id,incompatibility?.message ?: failure.toString())
+                ExportTrace.mark(id,"renderFallback")
+                ExportFaults.publicationPoint(ExportFaults.Mode.KILL_AFTER_PATH_TRANSITION)
+                checkCancelled()
+                check(freeBytes(context,candidate.parentFile!!)>requiredBytes) {
+                    "Insufficient space for finishing and gallery copy."
+                }
+                spec.clips.forEachIndexed { index, clip ->
+                    checkCancelled()
+                    check(sha(File(clip.path))==job.getJSONArray("sources").getJSONObject(index).getString("sha256")) {
+                        "Source changed; fallback was not started"
+                    }
+                }
+                if(candidate.exists()) check(candidate.renameTo(File(candidate.parentFile,"rejected-${System.nanoTime()}.mp4"))) {
+                    "Cannot retain rejected candidate"
+                }
+                selected=ExportPath.RENDER
             }
-            if(candidate.exists()) check(candidate.renameTo(File(candidate.parentFile,"rejected-${System.nanoTime()}.mp4"))) { "Cannot retain rejected candidate" }
-            ExportJournal.fallback(context,id,failure.toString())
-            ExportTrace.mark(id,"renderFallback")
-            job=ExportJournal.read(context,id)!!
-            attempt(ExportPath.RENDER)
         }
     }
 
@@ -88,12 +104,22 @@ internal object ExportProcessor {
      * Re-run every existing integrity check against a completed candidate using fresh
      * extractors and decoders. Never used for normal completion or publication recovery.
      */
-    fun reverify(context: Context, id: String, spec: ExportSpec, candidate: File): JSONObject {
+    fun reverify(context: Context, id: String, spec: ExportSpec, candidate: File, checkpointSha: String): JSONObject {
         ExportTrace.mark(id,"candidateReverifyStarted")
+        return verifyAttempt(context,id,spec,candidate,checkpointSha)
+    }
+
+    private fun verifyAttempt(context: Context, id: String, spec: ExportSpec,
+        candidate: File, checkpointSha: String? = null): JSONObject {
         return try {
-            verifyProduced(context,id,spec,candidate)
+            val report = verifyProduced(context,id,spec,candidate)
+            val checkpoint = ExportCandidate.from(checkNotNull(ExportJournal.read(context,id)))
+            if (checkpoint == null || report.getString("sha256") != checkpoint.sha256 ||
+                (checkpointSha != null && checkpointSha != checkpoint.sha256))
+                throw ExportIntegrityException("Candidate bytes changed during verification.")
+            report
         } catch (failure: Exception) {
-            recordVerificationFailure(context,id,failure,classify(failure))
+            recordVerificationFailure(context,id,failure,classifyVerificationFailure(failure))
             throw failure
         }
     }
@@ -115,23 +141,11 @@ internal object ExportProcessor {
             }
         }
         return ExportTrace.measure(id,"verification") {
-            val report=verify(candidate,spec.durationMs,id) { timing ->
+            val expected = spec.durationMs + if (ExportFaults.has(ExportFaults.Mode.WRONG_VERIFICATION_DURATION)) 500 else 0
+            verify(candidate,expected,id) { timing ->
                 val checkpoint=ExportJournal.read(context,id)!!
                 checkpoint.put("timingDiagnostic",timing);ExportJournal.write(context,id,checkpoint)
             }
-            val checkpoint=ExportCandidate.from(ExportJournal.read(context,id)!!)
-            if(checkpoint!=null && report.getString("sha256")!=checkpoint.sha256)
-                throw ExportIntegrityException("Candidate bytes changed during verification.")
-            report
-        }
-    }
-
-    private fun classify(failure: Throwable): String {
-        val chain=generateSequence(failure) { it.cause }.toList()
-        return when {
-            chain.any { it is ExportDecoderException } -> ExportCandidate.FAILURE_DECODER
-            chain.any { it is ExportIntegrityException } -> ExportCandidate.FAILURE_INTEGRITY
-            else -> ExportCandidate.FAILURE_OTHER
         }
     }
 
